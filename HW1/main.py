@@ -1,149 +1,301 @@
-"""
-main.py
-
-Solves 1D systems of springs (linear-elastic spring finite elements).
-
-Reads four input files (raw Python list literals):
-    connectivity_array.txt   -> list of [node_i, node_j] per element
-    element_stiffnesses.txt  -> list of float stiffnesses per element
-    external_nodal_forces.txt-> list of float forces per node
-    displacement_BCs.txt     -> list of float-or-None per node
-
-Writes three output files (raw Python list literals):
-    nodal_displacements.txt  -> list of float displacements per node
-    reaction_forces.txt      -> list of float reaction forces per node
-    internal_forces.txt      -> list of float internal (axial) forces per element
-
-All file paths are resolved relative to the location of this script, so the
-code runs identically regardless of the current working directory or OS.
-"""
-
-import ast
-from pathlib import Path
-
 import numpy as np
-
-# ---------------------------------------------------------------------------
-# Path handling (relative to this file, per assignment requirement)
-# ---------------------------------------------------------------------------
-SCRIPT_DIR = Path(__file__).resolve().parent
-
-INPUT_FILES = {
-    "connectivity": SCRIPT_DIR / "connectivity array.txt",
-    "stiffnesses": SCRIPT_DIR / "element stiffnesses.txt",
-    "forces": SCRIPT_DIR / "external nodal forces.txt",
-    "bcs": SCRIPT_DIR / "displacement BCs.txt",
-}
-
-OUTPUT_FILES = {
-    "displacements": SCRIPT_DIR / "nodal displacements.txt",
-    "reactions": SCRIPT_DIR / "reaction forces.txt",
-    "internal_forces": SCRIPT_DIR / "internal forces.txt",
-}
+import ast
 
 
-# ---------------------------------------------------------------------------
-# I/O helpers
-# ---------------------------------------------------------------------------
-def read_list_file(path: Path) -> list:
-    """Read a text file whose entire content is a raw Python list literal."""
-    text = path.read_text().strip()
-    data = ast.literal_eval(text)
-    if not isinstance(data, list):
-        raise ValueError(f"Expected a list in {path.name}, got {type(data)}")
-    return data
+# Reading input files
+
+def read_input(filename):
+    with open(filename, "r") as file:
+        return ast.literal_eval(file.read())
 
 
-def write_list_file(path: Path, data: list) -> None:
-    """Write a Python list of floats to a text file as a raw list literal."""
-    # Ensure plain python floats (not numpy scalar types) for a clean, valid
-    # Python list literal in the output file.
-    clean = [float(x) for x in data]
-    path.write_text(str(clean))
+# Assembling Element stiffness matrix
+
+def element_stiffness(k):
+    """
+    Return the 2x2 stiffness matrix for one spring.
+    """
+
+    return k * np.array([
+        [1, -1],
+        [-1, 1]
+    ])
 
 
-# ---------------------------------------------------------------------------
-# Finite element assembly and solve
-# ---------------------------------------------------------------------------
-def assemble_global_stiffness(connectivity, stiffnesses, n_nodes):
-    """Assemble the global stiffness matrix for a 1D spring system."""
-    K = np.zeros((n_nodes, n_nodes))
-    for (node_i, node_j), k in zip(connectivity, stiffnesses):
-        k_local = k * np.array([[1.0, -1.0], [-1.0, 1.0]])
-        dofs = [node_i, node_j]
-        for a in range(2):
-            for b in range(2):
-                K[dofs[a], dofs[b]] += k_local[a, b]
+# Assembling global stiffness matrix
+
+def assemble_global_stiffness(num_nodes, connectivity, k_values):
+    """
+    Assemble the global stiffness matrix K.
+    """
+
+    K = np.zeros((num_nodes, num_nodes))
+
+    for e in range(len(connectivity)):
+
+        # Global nodes for this element
+        nodes = connectivity[e]
+
+        # Element stiffness matrix
+        ke = element_stiffness(k_values[e])
+
+        # Map local nodes to global nodes
+        for local_row in range(2):
+            global_row = nodes[local_row]
+
+            for local_col in range(2):
+                global_col = nodes[local_col]
+
+                # Add local contribution to global matrix
+                K[global_row, global_col] += ke[local_row, local_col]
+
     return K
 
 
-def solve_displacements(K, forces, bcs):
-    """
-    Solve K u = F for nodal displacements, given prescribed displacement
-    boundary conditions (None entries in `bcs` are free DOFs).
-    """
-    n_nodes = len(forces)
-    forces = np.asarray(forces, dtype=float)
 
-    is_prescribed = np.array([bc is not None for bc in bcs])
-    is_free = ~is_prescribed
+# Building global force vector
 
-    u = np.zeros(n_nodes)
-    u[is_prescribed] = np.array(
-        [bc for bc in bcs if bc is not None], dtype=float
+def build_force_vector(num_nodes, loads):
+    """
+    Create the global external force vector F.
+    """
+
+    F = np.zeros(num_nodes)
+
+    for i in range(num_nodes):
+        F[i] = loads[i]
+
+    return F
+
+
+
+# Solving FEM system
+
+def solve_system(K, F, prescribed_displacements):
+    """
+    Apply displacement boundary conditions and solve
+    for the nodal displacements.
+    """
+
+    num_nodes = len(F)
+
+    # Find prescribed and free DOFs
+    fixed_dofs = []
+    free_dofs = []
+
+    for i in range(num_nodes):
+
+        if prescribed_displacements[i] is None:
+            free_dofs.append(i)
+        else:
+            fixed_dofs.append(i)
+
+    # Convert to numpy arrays
+    fixed_dofs = np.array(fixed_dofs, dtype=int)
+    free_dofs = np.array(free_dofs, dtype=int)
+
+    # Initialize displacement vector
+    u = np.zeros(num_nodes)
+
+    # Apply prescribed displacements
+    for i in fixed_dofs:
+        u[i] = prescribed_displacements[i]
+
+    # Partition stiffness matrix
+    K_FF = K[np.ix_(free_dofs, free_dofs)]
+    K_FE = K[np.ix_(free_dofs, fixed_dofs)]
+
+    # Partition force vector
+    F_F = F[free_dofs]
+
+    # Prescribed displacements
+    u_E = u[fixed_dofs]
+
+    # Solve:
+    #
+    # K_FF u_F = F_F - K_FE u_E
+    #
+    u_F = np.linalg.solve(
+        K_FF,
+        F_F - K_FE @ u_E
     )
 
-    if np.any(is_free):
-        K_ff = K[np.ix_(is_free, is_free)]
-        K_fp = K[np.ix_(is_free, is_prescribed)]
-        F_f = forces[is_free]
-        u_p = u[is_prescribed]
+    # Put free displacements into global vector
+    u[free_dofs] = u_F
 
-        rhs = F_f - K_fp @ u_p
-        u_f = np.linalg.solve(K_ff, rhs)
-        u[is_free] = u_f
-
-    return u
+    return u, free_dofs, fixed_dofs
 
 
-def compute_reactions(K, u, forces):
-    """Reaction forces at every node: R = K u - F_applied."""
-    forces = np.asarray(forces, dtype=float)
-    return K @ u - forces
+# Recovering reaction forces
 
-
-def compute_internal_forces(connectivity, stiffnesses, u):
+def recover_reactions(K, F, u, fixed_dofs):
     """
-    Axial (internal) force in each spring element:
-        f_elem = k * (u_j - u_i)
-    Positive value = element is in tension.
+    Calculate reaction forces using:
+
+        R = K u - F
     """
+
+    reactions = K @ u - F
+
+    # Only reactions at prescribed DOFs
+    reaction_output = np.zeros(len(F))
+
+    for i in fixed_dofs:
+        reaction_output[i] = reactions[i]
+
+    return reaction_output
+
+
+
+# Recovering element internal forces
+
+
+def recover_element_forces(u, connectivity, k_values):
+    """
+    Calculate extension/compression and internal force
+    for every spring element.
+    """
+
     internal_forces = []
-    for (node_i, node_j), k in zip(connectivity, stiffnesses):
-        f_elem = k * (u[node_j] - u[node_i])
-        internal_forces.append(f_elem)
+
+    for e in range(len(connectivity)):
+
+        # Global nodes for this element
+        i = connectivity[e][0]
+        j = connectivity[e][1]
+
+        # Element displacement
+        delta_u = u[j] - u[i]
+
+        # Internal spring force
+        force = k_values[e] * delta_u
+
+        internal_forces.append(force)
+
     return internal_forces
 
 
-# ---------------------------------------------------------------------------
-# Main driver
-# ---------------------------------------------------------------------------
+# Checking solution
+
+
+def check_solution(K, F, u, reactions, free_dofs):
+    """
+    Check symmetry and equilibrium.
+    """
+
+    # Check that K is symmetric
+    if np.allclose(K, K.T):
+        print("Stiffness matrix symmetry check: PASS")
+    else:
+        print("Stiffness matrix symmetry check: FAIL")
+
+    # Check residual
+    residual = K @ u - F - reactions
+
+    if np.allclose(residual, 0):
+        print("Residual check: PASS")
+    else:
+        print("Residual check: FAIL")
+
+    # Check free DOFs have approximately zero reaction
+    if np.allclose(reactions[free_dofs], 0):
+        print("Free DOF reaction check: PASS")
+    else:
+        print("Free DOF reaction check: FAIL")
+
+
+# Writing output files
+
+def write_output(filename, values):
+
+    with open(filename, "w") as file:
+        file.write(str([float(value) for value in values]))
+
+
+# Main
+
 def main():
-    connectivity = read_list_file(INPUT_FILES["connectivity"])
-    stiffnesses = read_list_file(INPUT_FILES["stiffnesses"])
-    forces = read_list_file(INPUT_FILES["forces"])
-    bcs = read_list_file(INPUT_FILES["bcs"])
 
-    n_nodes = len(forces)
+    # Read input files
+    connectivity = read_input("connectivity_array.txt")
+    k_values = read_input("element_stiffnesses.txt")
+    loads = read_input("external_nodal_forces.txt")
+    prescribed_displacements = read_input(
+        "displacement_BCs.txt"
+    )
 
-    K = assemble_global_stiffness(connectivity, stiffnesses, n_nodes)
-    u = solve_displacements(K, forces, bcs)
-    reactions = compute_reactions(K, u, forces)
-    internal_forces = compute_internal_forces(connectivity, stiffnesses, u)
+    # Number of nodes
+    num_nodes = len(loads)
 
-    write_list_file(OUTPUT_FILES["displacements"], u)
-    write_list_file(OUTPUT_FILES["reactions"], reactions)
-    write_list_file(OUTPUT_FILES["internal_forces"], internal_forces)
+    # Build force vector
+    F = build_force_vector(num_nodes, loads)
+
+    # Assemble global stiffness matrix
+    K = assemble_global_stiffness(
+        num_nodes,
+        connectivity,
+        k_values
+    )
+
+    # Solve for nodal displacements
+    u, free_dofs, fixed_dofs = solve_system(
+        K,
+        F,
+        prescribed_displacements
+    )
+
+    # Calculate reactions
+    reactions = recover_reactions(
+        K,
+        F,
+        u,
+        fixed_dofs
+    )
+
+    # Calculate element forces
+    internal_forces = recover_element_forces(
+        u,
+        connectivity,
+        k_values
+    )
+
+    # Check solution
+    check_solution(
+        K,
+        F,
+        u,
+        reactions,
+        free_dofs
+    )
+
+    # Write output files
+    write_output(
+        "nodal displacements.txt",
+        u
+    )
+
+    write_output(
+        "reaction forces.txt",
+        reactions
+    )
+
+    write_output(
+        "internal forces.txt",
+        internal_forces
+    )
+
+    # Print results
+    print("\nGlobal stiffness matrix:")
+    print(K)
+
+    print("\nNodal displacements:")
+    print(u)
+
+    print("\nReaction forces:")
+    print(reactions)
+
+    print("\nInternal element forces:")
+    print(internal_forces)
 
 
 if __name__ == "__main__":
