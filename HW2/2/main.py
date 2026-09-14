@@ -16,40 +16,155 @@ def read_input(filename):
 
 
 # ------------------------------------------------------------
+# Input validation
+# ------------------------------------------------------------
+
+def validate_inputs(
+    coordinates,
+    connectivity_raw,
+    k_values,
+    loads,
+    prescribed_displacements
+):
+    """
+    Check that all input data has the correct size,
+    shape, type, and connectivity.
+    """
+
+    num_nodes = len(coordinates)
+    num_elements = len(connectivity_raw)
+
+    # --------------------------------------------------------
+    # Check coordinates shape
+    # --------------------------------------------------------
+
+    if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+        raise ValueError(
+            "nodal coordinates must have shape (num_nodes, 2)"
+        )
+
+    # --------------------------------------------------------
+    # Check connectivity shape before converting to int
+    # --------------------------------------------------------
+
+    if not isinstance(connectivity_raw, list):
+        raise ValueError(
+            "connectivity array must be a list"
+        )
+
+    for element in connectivity_raw:
+
+        if not isinstance(element, list) or len(element) != 2:
+            raise ValueError(
+                "connectivity array must have shape "
+                "(num_elements, 2)"
+            )
+
+    # --------------------------------------------------------
+    # Check that every connectivity entry is an integer
+    # --------------------------------------------------------
+
+    for element in connectivity_raw:
+
+        for node in element:
+
+            if not isinstance(node, int):
+                raise ValueError(
+                    "every connectivity entry must be an integer"
+                )
+
+            if node < 0 or node >= num_nodes:
+                raise ValueError(
+                    "connectivity contains an invalid node number"
+                )
+
+    # --------------------------------------------------------
+    # Check number of element stiffnesses
+    # --------------------------------------------------------
+
+    if len(k_values) != num_elements:
+        raise ValueError(
+            "element stiffnesses must contain one value per element"
+        )
+
+    # --------------------------------------------------------
+    # Check external nodal forces shape
+    # --------------------------------------------------------
+
+    if loads.ndim != 2 or loads.shape != (num_nodes, 2):
+        raise ValueError(
+            "external nodal forces must have shape (num_nodes, 2)"
+        )
+
+    # --------------------------------------------------------
+    # Check displacement BCs
+    # --------------------------------------------------------
+
+    if len(prescribed_displacements) != num_nodes:
+        raise ValueError(
+            "displacement BCs must contain one [ux, uy] pair per node"
+        )
+
+    for node in range(num_nodes):
+
+        pair = prescribed_displacements[node]
+
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise ValueError(
+                "each displacement BC must contain [ux, uy]"
+            )
+
+        for value in pair:
+
+            if value is not None and not isinstance(
+                value,
+                (int, float)
+            ):
+                raise ValueError(
+                    "each displacement BC entry must be "
+                    "a number or None"
+                )
+
+    # --------------------------------------------------------
+    # Check for coincident end nodes
+    # --------------------------------------------------------
+
+    for e in range(num_elements):
+
+        node_i = connectivity_raw[e][0]
+        node_j = connectivity_raw[e][1]
+
+        if np.allclose(
+            coordinates[node_i],
+            coordinates[node_j]
+        ):
+            raise ValueError(
+                f"element {e} has coincident end nodes"
+            )
+
+    print("Input validation: PASS")
+
+
+# ------------------------------------------------------------
 # Element geometry
 # ------------------------------------------------------------
 
 def element_geometry(x1, x2):
     """
     Calculate element length and direction cosines.
-
-    Parameters
-    ----------
-    x1 : array-like
-        [x, y] coordinates of the first node.
-
-    x2 : array-like
-        [x, y] coordinates of the second node.
-
-    Returns
-    -------
-    L : float
-        Element length.
-
-    c : float
-        Cosine of the element angle with the global x-axis.
-
-    s : float
-        Sine of the element angle with the global x-axis.
     """
 
     delta_x = x2[0] - x1[0]
     delta_y = x2[1] - x1[1]
 
-    L = np.sqrt(delta_x**2 + delta_y**2)
+    L = np.sqrt(
+        delta_x**2 + delta_y**2
+    )
 
     if L <= 0:
-        raise ValueError("Truss element has zero length.")
+        raise ValueError(
+            "Truss element has zero length."
+        )
 
     c = delta_x / L
     s = delta_y / L
@@ -95,7 +210,10 @@ def element_stiffness(x1, x2, k):
     k = EA / L
     """
 
-    L, c, s = element_geometry(x1, x2)
+    L, c, s = element_geometry(
+        x1,
+        x2
+    )
 
     ke = k * np.array([
         [ c**2,   c*s,   -c**2,  -c*s ],
@@ -123,14 +241,16 @@ def assemble_global_stiffness(
 
     num_dofs = 2 * num_nodes
 
-    K = np.zeros((num_dofs, num_dofs))
+    K = np.zeros(
+        (num_dofs, num_dofs)
+    )
 
     for e in range(len(connectivity)):
 
         # Global nodes for this element
         nodes = connectivity[e]
 
-        # Coordinates of the two element nodes
+        # Coordinates of the two nodes
         x1 = coordinates[nodes[0]]
         x2 = coordinates[nodes[1]]
 
@@ -141,11 +261,12 @@ def assemble_global_stiffness(
             k_values[e]
         )
 
-        # Global DOFs for the element
-        gdofs = element_dofs(nodes)
+        # Global DOFs
+        gdofs = element_dofs(
+            nodes
+        )
 
-        # Map local element stiffness matrix
-        # into global stiffness matrix
+        # Add local contributions to global matrix
         for local_row in range(4):
 
             global_row = gdofs[local_row]
@@ -154,8 +275,13 @@ def assemble_global_stiffness(
 
                 global_col = gdofs[local_col]
 
-                K[global_row, global_col] += \
-                    ke[local_row, local_col]
+                K[
+                    global_row,
+                    global_col
+                ] += ke[
+                    local_row,
+                    local_col
+                ]
 
     return K
 
@@ -164,27 +290,35 @@ def assemble_global_stiffness(
 # Build global force vector
 # ------------------------------------------------------------
 
-def build_force_vector(num_nodes, loads):
+def build_force_vector(
+    num_nodes,
+    loads
+):
     """
     Create the global external force vector.
 
-    Input format:
+    Input:
         [
             [Fx0, Fy0],
             [Fx1, Fy1],
             ...
         ]
 
-    Global vector format:
+    Output:
         [Fx0, Fy0, Fx1, Fy1, ...]
     """
 
-    F = np.zeros(2 * num_nodes)
+    F = np.zeros(
+        2 * num_nodes
+    )
 
     for node in range(num_nodes):
 
-        F[2 * node] = loads[node][0]
-        F[2 * node + 1] = loads[node][1]
+        F[2 * node] = \
+            loads[node][0]
+
+        F[2 * node + 1] = \
+            loads[node][1]
 
     return F
 
@@ -193,29 +327,49 @@ def build_force_vector(num_nodes, loads):
 # Solve FEM system
 # ------------------------------------------------------------
 
-def solve_system(K, F, prescribed_displacements):
+def solve_system(
+    K,
+    F,
+    prescribed_displacements
+):
     """
     Apply displacement boundary conditions and solve
     for the global nodal displacement vector.
     """
 
-    num_nodes = len(prescribed_displacements)
+    num_nodes = len(
+        prescribed_displacements
+    )
+
     num_dofs = 2 * num_nodes
 
     fixed_dofs = []
     free_dofs = []
 
-    # Determine free and constrained DOFs
+    # --------------------------------------------------------
+    # Identify fixed and free DOFs
+    # --------------------------------------------------------
+
     for node in range(num_nodes):
 
         for direction in range(2):
 
-            global_dof = 2 * node + direction
+            global_dof = \
+                2 * node + direction
 
-            if prescribed_displacements[node][direction] is None:
-                free_dofs.append(global_dof)
+            if prescribed_displacements[
+                node
+            ][direction] is None:
+
+                free_dofs.append(
+                    global_dof
+                )
+
             else:
-                fixed_dofs.append(global_dof)
+
+                fixed_dofs.append(
+                    global_dof
+                )
 
     fixed_dofs = np.array(
         fixed_dofs,
@@ -227,68 +381,111 @@ def solve_system(K, F, prescribed_displacements):
         dtype=int
     )
 
+    # --------------------------------------------------------
     # Initialize global displacement vector
-    u = np.zeros(num_dofs)
+    # --------------------------------------------------------
 
-    # Apply prescribed displacements
+    u = np.zeros(
+        num_dofs
+    )
+
+    # --------------------------------------------------------
+    # Insert prescribed displacements
+    # --------------------------------------------------------
+
     for node in range(num_nodes):
 
         for direction in range(2):
 
-            value = prescribed_displacements[node][direction]
+            value = prescribed_displacements[
+                node
+            ][direction]
 
             if value is not None:
 
-                global_dof = 2 * node + direction
+                global_dof = \
+                    2 * node + direction
 
-                u[global_dof] = float(value)
+                u[global_dof] = \
+                    float(value)
 
-    # Partition stiffness matrix
-    K_FF = K[np.ix_(free_dofs, free_dofs)]
+    # --------------------------------------------------------
+    # Partition system
+    # --------------------------------------------------------
 
-    K_FE = K[np.ix_(free_dofs, fixed_dofs)]
+    K_FF = K[
+        np.ix_(
+            free_dofs,
+            free_dofs
+        )
+    ]
 
-    # Partition force vector
-    F_F = F[free_dofs]
+    K_FE = K[
+        np.ix_(
+            free_dofs,
+            fixed_dofs
+        )
+    ]
 
-    # Prescribed displacement vector
-    u_E = u[fixed_dofs]
+    F_F = F[
+        free_dofs
+    ]
 
+    u_E = u[
+        fixed_dofs
+    ]
+
+    # --------------------------------------------------------
     # Solve:
     #
     # K_FF u_F = F_F - K_FE u_E
-    #
+    # --------------------------------------------------------
+
     u_F = np.linalg.solve(
         K_FF,
         F_F - K_FE @ u_E
     )
 
-    # Insert free displacements
-    # into the global displacement vector
+    # Put free displacements back
+    # into full displacement vector
     u[free_dofs] = u_F
 
-    return u, free_dofs, fixed_dofs
+    return (
+        u,
+        free_dofs,
+        fixed_dofs
+    )
 
 
 # ------------------------------------------------------------
 # Recover reaction forces
 # ------------------------------------------------------------
 
-def recover_reactions(K, F, u, fixed_dofs):
+def recover_reactions(
+    K,
+    F,
+    u,
+    fixed_dofs
+):
     """
-    Calculate reaction forces using:
+    Calculate reactions using:
 
         R = K u - F
 
-    Reaction values at free DOFs are explicitly set to zero.
+    Free DOFs are explicitly set to zero.
     """
 
-    full_residual = K @ u - F
+    full_residual = \
+        K @ u - F
 
-    reactions = np.zeros(len(F))
+    reactions = np.zeros(
+        len(F)
+    )
 
     for dof in fixed_dofs:
-        reactions[dof] = full_residual[dof]
+
+        reactions[dof] = \
+            full_residual[dof]
 
     return reactions
 
@@ -304,7 +501,8 @@ def recover_element_forces(
     u
 ):
     """
-    Calculate the axial internal force in each truss element.
+    Calculate the axial internal force
+    in each truss element.
 
     Positive = tension
     Negative = compression
@@ -312,24 +510,38 @@ def recover_element_forces(
 
     internal_forces = []
 
-    for e in range(len(connectivity)):
+    for e in range(
+        len(connectivity)
+    ):
 
         nodes = connectivity[e]
 
         # Element coordinates
-        x1 = coordinates[nodes[0]]
-        x2 = coordinates[nodes[1]]
+        x1 = coordinates[
+            nodes[0]
+        ]
+
+        x2 = coordinates[
+            nodes[1]
+        ]
 
         # Element geometry
-        L, c, s = element_geometry(x1, x2)
+        L, c, s = element_geometry(
+            x1,
+            x2
+        )
 
         # Element global DOFs
-        gdofs = element_dofs(nodes)
+        gdofs = element_dofs(
+            nodes
+        )
 
         # Element displacement vector
-        u_e = u[gdofs]
+        u_e = u[
+            gdofs
+        ]
 
-        # Axial change in length
+        # Axial extension:
         #
         # delta = [-c, -s, c, s] * u_e
         #
@@ -341,9 +553,14 @@ def recover_element_forces(
         )
 
         # Internal axial force
-        force = k_values[e] * axial_extension
+        force = (
+            k_values[e]
+            * axial_extension
+        )
 
-        internal_forces.append(force)
+        internal_forces.append(
+            force
+        )
 
     return internal_forces
 
@@ -360,53 +577,110 @@ def check_solution(
     free_dofs
 ):
     """
-    Check symmetry, residual, free DOF reactions,
+    Check stiffness matrix symmetry,
+    residual, free DOF reactions,
     and global equilibrium.
     """
 
-    # Check that global stiffness matrix is symmetric
-    if np.allclose(K, K.T):
-        print("Stiffness matrix symmetry check: PASS")
+    # --------------------------------------------------------
+    # Symmetry check
+    # --------------------------------------------------------
+
+    if np.allclose(
+        K,
+        K.T
+    ):
+        print(
+            "Stiffness matrix symmetry check: PASS"
+        )
+
     else:
-        print("Stiffness matrix symmetry check: FAIL")
+        print(
+            "Stiffness matrix symmetry check: FAIL"
+        )
 
-    # Check residual
-    residual = K @ u - F - reactions
+    # --------------------------------------------------------
+    # Residual check
+    # --------------------------------------------------------
 
-    if np.allclose(residual, 0):
-        print("Residual check: PASS")
-    else:
-        print("Residual check: FAIL")
-
-    # Free DOFs should have zero reactions
-    if np.allclose(reactions[free_dofs], 0):
-        print("Free DOF reaction check: PASS")
-    else:
-        print("Free DOF reaction check: FAIL")
-
-    # Global equilibrium
-    force_pairs = F.reshape((-1, 2))
-    reaction_pairs = reactions.reshape((-1, 2))
-
-    total_external_force = np.sum(
-        force_pairs,
-        axis=0
+    residual = (
+        K @ u
+        - F
+        - reactions
     )
 
-    total_reaction_force = np.sum(
-        reaction_pairs,
-        axis=0
+    if np.allclose(
+        residual,
+        0
+    ):
+        print(
+            "Residual check: PASS"
+        )
+
+    else:
+        print(
+            "Residual check: FAIL"
+        )
+
+    # --------------------------------------------------------
+    # Free DOF reaction check
+    # --------------------------------------------------------
+
+    if np.allclose(
+        reactions[free_dofs],
+        0
+    ):
+        print(
+            "Free DOF reaction check: PASS"
+        )
+
+    else:
+        print(
+            "Free DOF reaction check: FAIL"
+        )
+
+    # --------------------------------------------------------
+    # Global equilibrium check
+    # --------------------------------------------------------
+
+    force_pairs = F.reshape(
+        (-1, 2)
     )
+
+    reaction_pairs = \
+        reactions.reshape(
+            (-1, 2)
+        )
+
+    total_external_force = \
+        np.sum(
+            force_pairs,
+            axis=0
+        )
+
+    total_reaction_force = \
+        np.sum(
+            reaction_pairs,
+            axis=0
+        )
 
     equilibrium = (
         total_external_force
         + total_reaction_force
     )
 
-    if np.allclose(equilibrium, 0):
-        print("Global equilibrium check: PASS")
+    if np.allclose(
+        equilibrium,
+        0
+    ):
+        print(
+            "Global equilibrium check: PASS"
+        )
+
     else:
-        print("Global equilibrium check: FAIL")
+        print(
+            "Global equilibrium check: FAIL"
+        )
 
     print(
         "Net force [Fx, Fy]:",
@@ -418,12 +692,18 @@ def check_solution(
 # Write output files
 # ------------------------------------------------------------
 
-def write_output(filename, values):
+def write_output(
+    filename,
+    values
+):
     """
     Write values as a raw Python list.
     """
 
-    if isinstance(values, np.ndarray):
+    if isinstance(
+        values,
+        np.ndarray
+    ):
         values = values.tolist()
 
     else:
@@ -432,8 +712,14 @@ def write_output(filename, values):
             for value in values
         ]
 
-    with open(filename, "w") as file:
-        file.write(str(values))
+    with open(
+        filename,
+        "w"
+    ) as file:
+
+        file.write(
+            str(values)
+        )
 
 
 # ------------------------------------------------------------
@@ -443,22 +729,22 @@ def write_output(filename, values):
 def main():
 
     # --------------------------------------------------------
-    # Read input files
+    # Read raw input files
     # --------------------------------------------------------
 
-    coordinates = read_input(
+    coordinates_raw = read_input(
         "nodal coordinates.txt"
     )
 
-    connectivity = read_input(
+    connectivity_raw = read_input(
         "connectivity array.txt"
     )
 
-    k_values = read_input(
+    k_values_raw = read_input(
         "element stiffnesses.txt"
     )
 
-    loads = read_input(
+    loads_raw = read_input(
         "external nodal forces.txt"
     )
 
@@ -466,32 +752,51 @@ def main():
         "displacement BCs.txt"
     )
 
-    # Convert numerical inputs to NumPy arrays
+    # --------------------------------------------------------
+    # Convert numerical inputs
+    # --------------------------------------------------------
+
     coordinates = np.array(
-        coordinates,
+        coordinates_raw,
         dtype=float
     )
 
-    connectivity = np.array(
-        connectivity,
-        dtype=int
-    )
-
     k_values = np.array(
-        k_values,
+        k_values_raw,
         dtype=float
     )
 
     loads = np.array(
-        loads,
+        loads_raw,
         dtype=float
     )
 
+    # --------------------------------------------------------
+    # Validate raw and converted inputs
+    # --------------------------------------------------------
+
+    validate_inputs(
+        coordinates,
+        connectivity_raw,
+        k_values,
+        loads,
+        prescribed_displacements
+    )
+
+    # Only convert connectivity to integer
+    # after verifying every entry is actually an integer
+    connectivity = np.array(
+        connectivity_raw,
+        dtype=int
+    )
+
     # Number of nodes
-    num_nodes = len(coordinates)
+    num_nodes = len(
+        coordinates
+    )
 
     # --------------------------------------------------------
-    # Build force vector
+    # Build global force vector
     # --------------------------------------------------------
 
     F = build_force_vector(
@@ -514,33 +819,36 @@ def main():
     # Solve for nodal displacements
     # --------------------------------------------------------
 
-    u, free_dofs, fixed_dofs = solve_system(
-        K,
-        F,
-        prescribed_displacements
-    )
+    u, free_dofs, fixed_dofs = \
+        solve_system(
+            K,
+            F,
+            prescribed_displacements
+        )
 
     # --------------------------------------------------------
-    # Calculate reaction forces
+    # Recover reaction forces
     # --------------------------------------------------------
 
-    reactions = recover_reactions(
-        K,
-        F,
-        u,
-        fixed_dofs
-    )
+    reactions = \
+        recover_reactions(
+            K,
+            F,
+            u,
+            fixed_dofs
+        )
 
     # --------------------------------------------------------
-    # Calculate element forces
+    # Recover internal forces
     # --------------------------------------------------------
 
-    internal_forces = recover_element_forces(
-        coordinates,
-        connectivity,
-        k_values,
-        u
-    )
+    internal_forces = \
+        recover_element_forces(
+            coordinates,
+            connectivity,
+            k_values,
+            u
+        )
 
     # --------------------------------------------------------
     # Check solution
@@ -555,19 +863,21 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Reshape displacement and reaction outputs
+    # Reshape output data
     # --------------------------------------------------------
 
-    nodal_displacements = u.reshape(
-        (num_nodes, 2)
-    )
+    nodal_displacements = \
+        u.reshape(
+            (num_nodes, 2)
+        )
 
-    reaction_forces = reactions.reshape(
-        (num_nodes, 2)
-    )
+    reaction_forces = \
+        reactions.reshape(
+            (num_nodes, 2)
+        )
 
     # --------------------------------------------------------
-    # Write output files
+    # Write required output files
     # --------------------------------------------------------
 
     write_output(
@@ -589,17 +899,37 @@ def main():
     # Print results
     # --------------------------------------------------------
 
-    print("\nGlobal stiffness matrix:")
-    print(K)
+    print(
+        "\nGlobal stiffness matrix:"
+    )
 
-    print("\nNodal displacements:")
-    print(nodal_displacements)
+    print(
+        K
+    )
 
-    print("\nReaction forces:")
-    print(reaction_forces)
+    print(
+        "\nNodal displacements:"
+    )
 
-    print("\nInternal element forces:")
-    print(internal_forces)
+    print(
+        nodal_displacements
+    )
+
+    print(
+        "\nReaction forces:"
+    )
+
+    print(
+        reaction_forces
+    )
+
+    print(
+        "\nInternal element forces:"
+    )
+
+    print(
+        internal_forces
+    )
 
 
 if __name__ == "__main__":
