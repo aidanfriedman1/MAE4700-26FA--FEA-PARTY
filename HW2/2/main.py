@@ -917,23 +917,23 @@ def main():
     # --------------------------------------------------------
 
     coordinates_raw = read_input(
-        "nodal coordinates.txt"
+        "nodal_coordinates.txt"
     )
 
     connectivity_raw = read_input(
-        "connectivity array.txt"
+        "connectivity_array.txt"
     )
 
     k_values_raw = read_input(
-        "element stiffnesses.txt"
+        "element_stiffnesses.txt"
     )
 
     loads_raw = read_input(
-        "external nodal forces.txt"
+        "external_nodal_forces.txt"
     )
 
     prescribed_displacements = read_input(
-        "displacement BCs.txt"
+        "displacement_BCs.txt"
     )
 
     # --------------------------------------------------------
@@ -1064,17 +1064,17 @@ def main():
     # --------------------------------------------------------
 
     write_output(
-        "nodal displacements.txt",
+        "nodal_displacements.txt",
         nodal_displacements
     )
 
     write_output(
-        "reaction forces.txt",
+        "reaction_forces.txt",
         reaction_forces
     )
 
     write_output(
-        "internal forces.txt",
+        "internal_forces.txt",
         internal_forces
     )
 
