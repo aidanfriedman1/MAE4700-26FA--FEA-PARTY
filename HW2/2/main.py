@@ -1,5 +1,6 @@
 import numpy as np
 import ast
+from pathlib import Path
 
 
 # ============================================================
@@ -7,11 +8,9 @@ import ast
 # ============================================================
 
 def read_input(filename):
-    """
-    Read a raw Python list from a text file.
-    """
+    filepath = Path(__file__).parent / filename
 
-    with open(filename, "r") as file:
+    with open(filepath, "r") as file:
         return ast.literal_eval(file.read())
 
 
