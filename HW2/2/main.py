@@ -2,9 +2,9 @@ import numpy as np
 import ast
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Reading input files
-# ------------------------------------------------------------
+# ============================================================
 
 def read_input(filename):
     """
@@ -15,9 +15,9 @@ def read_input(filename):
         return ast.literal_eval(file.read())
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Input validation
-# ------------------------------------------------------------
+# ============================================================
 
 def validate_inputs(
     coordinates,
@@ -35,7 +35,7 @@ def validate_inputs(
     num_elements = len(connectivity_raw)
 
     # --------------------------------------------------------
-    # Check coordinates shape
+    # Nodal coordinates must have shape (num_nodes, 2)
     # --------------------------------------------------------
 
     if coordinates.ndim != 2 or coordinates.shape[1] != 2:
@@ -44,7 +44,7 @@ def validate_inputs(
         )
 
     # --------------------------------------------------------
-    # Check connectivity shape before converting to int
+    # Connectivity must have shape (num_elements, 2)
     # --------------------------------------------------------
 
     if not isinstance(connectivity_raw, list):
@@ -61,7 +61,8 @@ def validate_inputs(
             )
 
     # --------------------------------------------------------
-    # Check that every connectivity entry is an integer
+    # Connectivity entries must be integers from
+    # 0 to num_nodes - 1
     # --------------------------------------------------------
 
     for element in connectivity_raw:
@@ -79,7 +80,7 @@ def validate_inputs(
                 )
 
     # --------------------------------------------------------
-    # Check number of element stiffnesses
+    # One element stiffness per element
     # --------------------------------------------------------
 
     if len(k_values) != num_elements:
@@ -88,7 +89,7 @@ def validate_inputs(
         )
 
     # --------------------------------------------------------
-    # Check external nodal forces shape
+    # External nodal forces must have shape (num_nodes, 2)
     # --------------------------------------------------------
 
     if loads.ndim != 2 or loads.shape != (num_nodes, 2):
@@ -97,7 +98,7 @@ def validate_inputs(
         )
 
     # --------------------------------------------------------
-    # Check displacement BCs
+    # One displacement BC pair per node
     # --------------------------------------------------------
 
     if len(prescribed_displacements) != num_nodes:
@@ -126,7 +127,7 @@ def validate_inputs(
                 )
 
     # --------------------------------------------------------
-    # Check for coincident end nodes
+    # No element may have coincident end nodes
     # --------------------------------------------------------
 
     for e in range(num_elements):
@@ -145,13 +146,13 @@ def validate_inputs(
     print("Input validation: PASS")
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Element geometry
-# ------------------------------------------------------------
+# ============================================================
 
 def element_geometry(x1, x2):
     """
-    Calculate element length and direction cosines.
+    Calculate the element length and direction cosines.
     """
 
     delta_x = x2[0] - x1[0]
@@ -172,19 +173,18 @@ def element_geometry(x1, x2):
     return L, c, s
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Element DOF mapping
-# ------------------------------------------------------------
+# ============================================================
 
 def element_dofs(nodes):
     """
-    Map the two nodes of one element to the four global DOFs.
+    Map the two nodes of one element to four global DOFs.
 
-    Zero-based node numbering is used.
+    Zero-based node numbering:
 
-    Node n:
-        x DOF = 2*n
-        y DOF = 2*n + 1
+        Node n x DOF = 2*n
+        Node n y DOF = 2*n + 1
     """
 
     i = nodes[0]
@@ -198,9 +198,9 @@ def element_dofs(nodes):
     ], dtype=int)
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Element stiffness matrix
-# ------------------------------------------------------------
+# ============================================================
 
 def element_stiffness(x1, x2, k):
     """
@@ -225,9 +225,101 @@ def element_stiffness(x1, x2, k):
     return ke
 
 
-# ------------------------------------------------------------
+# ============================================================
+# Element-level numerical checks
+# ============================================================
+
+def check_element_stiffness(
+    ke,
+    c,
+    s,
+    element_number
+):
+    """
+    Check:
+
+    1. Element stiffness symmetry.
+    2. Horizontal element stiffness acts only in x.
+    3. Vertical element stiffness acts only in y.
+    """
+
+    # --------------------------------------------------------
+    # Element symmetry
+    # --------------------------------------------------------
+
+    if not np.allclose(
+        ke,
+        ke.T
+    ):
+        raise ValueError(
+            f"Element {element_number} stiffness matrix "
+            f"is not symmetric."
+        )
+
+    # --------------------------------------------------------
+    # Horizontal element check
+    #
+    # If s = 0, the element has no stiffness in global y.
+    # Therefore rows/columns associated with y DOFs
+    # should be approximately zero.
+    # --------------------------------------------------------
+
+    if np.isclose(s, 0.0):
+
+        y_dofs = [1, 3]
+
+        if not np.allclose(
+            ke[y_dofs, :],
+            0.0
+        ):
+            raise ValueError(
+                f"Horizontal element {element_number} "
+                f"has unexpected y-direction stiffness."
+            )
+
+        if not np.allclose(
+            ke[:, y_dofs],
+            0.0
+        ):
+            raise ValueError(
+                f"Horizontal element {element_number} "
+                f"has unexpected y-direction stiffness."
+            )
+
+    # --------------------------------------------------------
+    # Vertical element check
+    #
+    # If c = 0, the element has no stiffness in global x.
+    # Therefore rows/columns associated with x DOFs
+    # should be approximately zero.
+    # --------------------------------------------------------
+
+    if np.isclose(c, 0.0):
+
+        x_dofs = [0, 2]
+
+        if not np.allclose(
+            ke[x_dofs, :],
+            0.0
+        ):
+            raise ValueError(
+                f"Vertical element {element_number} "
+                f"has unexpected x-direction stiffness."
+            )
+
+        if not np.allclose(
+            ke[:, x_dofs],
+            0.0
+        ):
+            raise ValueError(
+                f"Vertical element {element_number} "
+                f"has unexpected x-direction stiffness."
+            )
+
+
+# ============================================================
 # Assemble global stiffness matrix
-# ------------------------------------------------------------
+# ============================================================
 
 def assemble_global_stiffness(
     num_nodes,
@@ -247,12 +339,18 @@ def assemble_global_stiffness(
 
     for e in range(len(connectivity)):
 
-        # Global nodes for this element
+        # Global nodes
         nodes = connectivity[e]
 
-        # Coordinates of the two nodes
+        # Node coordinates
         x1 = coordinates[nodes[0]]
         x2 = coordinates[nodes[1]]
+
+        # Geometry
+        L, c, s = element_geometry(
+            x1,
+            x2
+        )
 
         # Element stiffness matrix
         ke = element_stiffness(
@@ -261,12 +359,26 @@ def assemble_global_stiffness(
             k_values[e]
         )
 
+        # ----------------------------------------------------
+        # Check element symmetry and orientation behavior
+        # ----------------------------------------------------
+
+        check_element_stiffness(
+            ke,
+            c,
+            s,
+            e
+        )
+
         # Global DOFs
         gdofs = element_dofs(
             nodes
         )
 
-        # Add local contributions to global matrix
+        # ----------------------------------------------------
+        # Assemble local matrix into global matrix
+        # ----------------------------------------------------
+
         for local_row in range(4):
 
             global_row = gdofs[local_row]
@@ -283,29 +395,29 @@ def assemble_global_stiffness(
                     local_col
                 ]
 
+    print(
+        "Element stiffness symmetry check: PASS"
+    )
+
+    print(
+        "Horizontal/vertical element stiffness check: PASS"
+    )
+
     return K
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Build global force vector
-# ------------------------------------------------------------
+# ============================================================
 
 def build_force_vector(
     num_nodes,
     loads
 ):
     """
-    Create the global external force vector.
+    Create the global external force vector:
 
-    Input:
-        [
-            [Fx0, Fy0],
-            [Fx1, Fy1],
-            ...
-        ]
-
-    Output:
-        [Fx0, Fy0, Fx1, Fy1, ...]
+    [Fx0, Fy0, Fx1, Fy1, ...]
     """
 
     F = np.zeros(
@@ -323,9 +435,9 @@ def build_force_vector(
     return F
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Solve FEM system
-# ------------------------------------------------------------
+# ============================================================
 
 def solve_system(
     K,
@@ -382,7 +494,7 @@ def solve_system(
     )
 
     # --------------------------------------------------------
-    # Initialize global displacement vector
+    # Initialize displacement vector
     # --------------------------------------------------------
 
     u = np.zeros(
@@ -390,7 +502,7 @@ def solve_system(
     )
 
     # --------------------------------------------------------
-    # Insert prescribed displacements
+    # Apply prescribed displacements
     # --------------------------------------------------------
 
     for node in range(num_nodes):
@@ -410,7 +522,7 @@ def solve_system(
                     float(value)
 
     # --------------------------------------------------------
-    # Partition system
+    # Partition stiffness matrix
     # --------------------------------------------------------
 
     K_FF = K[
@@ -427,6 +539,10 @@ def solve_system(
         )
     ]
 
+    # --------------------------------------------------------
+    # Partition force vector
+    # --------------------------------------------------------
+
     F_F = F[
         free_dofs
     ]
@@ -436,18 +552,56 @@ def solve_system(
     ]
 
     # --------------------------------------------------------
+    # Insufficient constraints / singularity check
+    # --------------------------------------------------------
+
+    if len(free_dofs) > 0:
+
+        condition_number = np.linalg.cond(
+            K_FF
+        )
+
+        print(
+            "K_FF condition number:",
+            condition_number
+        )
+
+        if (
+            not np.isfinite(condition_number)
+            or condition_number > 1e12
+        ):
+            raise ValueError(
+                "K_FF is singular or ill-conditioned. "
+                "The structure may have insufficient constraints, "
+                "a mechanism, or a disconnected node."
+            )
+
+    # --------------------------------------------------------
     # Solve:
     #
     # K_FF u_F = F_F - K_FE u_E
     # --------------------------------------------------------
 
-    u_F = np.linalg.solve(
-        K_FF,
-        F_F - K_FE @ u_E
+    try:
+
+        u_F = np.linalg.solve(
+            K_FF,
+            F_F - K_FE @ u_E
+        )
+
+    except np.linalg.LinAlgError:
+
+        raise ValueError(
+            "The system could not be solved because K_FF "
+            "is singular. Check for insufficient constraints "
+            "or a structural mechanism."
+        )
+
+    print(
+        "Insufficient-constraint / singularity check: PASS"
     )
 
-    # Put free displacements back
-    # into full displacement vector
+    # Insert free displacements
     u[free_dofs] = u_F
 
     return (
@@ -457,9 +611,9 @@ def solve_system(
     )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Recover reaction forces
-# ------------------------------------------------------------
+# ============================================================
 
 def recover_reactions(
     K,
@@ -468,11 +622,11 @@ def recover_reactions(
     fixed_dofs
 ):
     """
-    Calculate reactions using:
+    Calculate reaction forces:
 
         R = K u - F
 
-    Free DOFs are explicitly set to zero.
+    Free DOF reaction entries are set to zero.
     """
 
     full_residual = \
@@ -490,9 +644,9 @@ def recover_reactions(
     return reactions
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Recover element internal forces
-# ------------------------------------------------------------
+# ============================================================
 
 def recover_element_forces(
     coordinates,
@@ -516,7 +670,7 @@ def recover_element_forces(
 
         nodes = connectivity[e]
 
-        # Element coordinates
+        # Node coordinates
         x1 = coordinates[
             nodes[0]
         ]
@@ -531,7 +685,7 @@ def recover_element_forces(
             x2
         )
 
-        # Element global DOFs
+        # Global DOFs
         gdofs = element_dofs(
             nodes
         )
@@ -541,10 +695,12 @@ def recover_element_forces(
             gdofs
         ]
 
-        # Axial extension:
+        # ----------------------------------------------------
+        # Axial extension
         #
-        # delta = [-c, -s, c, s] * u_e
-        #
+        # delta = [-c, -s, c, s] u_e
+        # ----------------------------------------------------
+
         axial_extension = (
             -c * u_e[0]
             -s * u_e[1]
@@ -552,7 +708,10 @@ def recover_element_forces(
             +s * u_e[3]
         )
 
-        # Internal axial force
+        # ----------------------------------------------------
+        # Axial element force
+        # ----------------------------------------------------
+
         force = (
             k_values[e]
             * axial_extension
@@ -565,9 +724,9 @@ def recover_element_forces(
     return internal_forces
 
 
-# ------------------------------------------------------------
-# Check solution
-# ------------------------------------------------------------
+# ============================================================
+# Numerical solution checks
+# ============================================================
 
 def check_solution(
     K,
@@ -577,53 +736,77 @@ def check_solution(
     free_dofs
 ):
     """
-    Check stiffness matrix symmetry,
-    residual, free DOF reactions,
-    and global equilibrium.
+    Perform numerical checks:
+
+    1. Global stiffness symmetry
+    2. Free-DOF residual
+    3. Free DOF reaction values
+    4. Global force equilibrium
     """
 
     # --------------------------------------------------------
-    # Symmetry check
+    # 1. Global symmetry
+    #
+    # ||K - K^T|| should be near zero
     # --------------------------------------------------------
+
+    global_symmetry_error = \
+        np.linalg.norm(
+            K - K.T
+        )
+
+    print(
+        "\nGlobal symmetry error ||K - K^T||:",
+        global_symmetry_error
+    )
 
     if np.allclose(
         K,
         K.T
     ):
         print(
-            "Stiffness matrix symmetry check: PASS"
+            "Global stiffness symmetry check: PASS"
         )
 
     else:
         print(
-            "Stiffness matrix symmetry check: FAIL"
+            "Global stiffness symmetry check: FAIL"
         )
 
     # --------------------------------------------------------
-    # Residual check
+    # 2. Free-DOF residual
+    #
+    # (K u - F)_F should be near zero
     # --------------------------------------------------------
 
-    residual = (
-        K @ u
-        - F
-        - reactions
+    full_residual = \
+        K @ u - F
+
+    free_residual = \
+        full_residual[
+            free_dofs
+        ]
+
+    print(
+        "Free-DOF residual:",
+        free_residual
     )
 
     if np.allclose(
-        residual,
+        free_residual,
         0
     ):
         print(
-            "Residual check: PASS"
+            "Free-DOF residual check: PASS"
         )
 
     else:
         print(
-            "Residual check: FAIL"
+            "Free-DOF residual check: FAIL"
         )
 
     # --------------------------------------------------------
-    # Free DOF reaction check
+    # Free DOF reaction output should be zero
     # --------------------------------------------------------
 
     if np.allclose(
@@ -640,7 +823,9 @@ def check_solution(
         )
 
     # --------------------------------------------------------
-    # Global equilibrium check
+    # 3. Global equilibrium
+    #
+    # Applied loads + reactions = 0
     # --------------------------------------------------------
 
     force_pairs = F.reshape(
@@ -669,6 +854,11 @@ def check_solution(
         + total_reaction_force
     )
 
+    print(
+        "Global equilibrium residual [Fx, Fy]:",
+        equilibrium
+    )
+
     if np.allclose(
         equilibrium,
         0
@@ -682,15 +872,10 @@ def check_solution(
             "Global equilibrium check: FAIL"
         )
 
-    print(
-        "Net force [Fx, Fy]:",
-        equilibrium
-    )
 
-
-# ------------------------------------------------------------
+# ============================================================
 # Write output files
-# ------------------------------------------------------------
+# ============================================================
 
 def write_output(
     filename,
@@ -722,9 +907,9 @@ def write_output(
         )
 
 
-# ------------------------------------------------------------
+# ============================================================
 # Main
-# ------------------------------------------------------------
+# ============================================================
 
 def main():
 
@@ -753,7 +938,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Convert numerical inputs
+    # Convert numerical quantities
     # --------------------------------------------------------
 
     coordinates = np.array(
@@ -772,7 +957,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Validate raw and converted inputs
+    # Validate inputs
     # --------------------------------------------------------
 
     validate_inputs(
@@ -783,20 +968,19 @@ def main():
         prescribed_displacements
     )
 
-    # Only convert connectivity to integer
-    # after verifying every entry is actually an integer
+    # Convert connectivity only after validating
+    # that all entries are integers
     connectivity = np.array(
         connectivity_raw,
         dtype=int
     )
 
-    # Number of nodes
     num_nodes = len(
         coordinates
     )
 
     # --------------------------------------------------------
-    # Build global force vector
+    # Build force vector
     # --------------------------------------------------------
 
     F = build_force_vector(
@@ -816,7 +1000,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Solve for nodal displacements
+    # Solve system
     # --------------------------------------------------------
 
     u, free_dofs, fixed_dofs = \
@@ -827,7 +1011,7 @@ def main():
         )
 
     # --------------------------------------------------------
-    # Recover reaction forces
+    # Recover reactions
     # --------------------------------------------------------
 
     reactions = \
@@ -839,7 +1023,7 @@ def main():
         )
 
     # --------------------------------------------------------
-    # Recover internal forces
+    # Recover internal element forces
     # --------------------------------------------------------
 
     internal_forces = \
@@ -851,7 +1035,7 @@ def main():
         )
 
     # --------------------------------------------------------
-    # Check solution
+    # Numerical validation checks
     # --------------------------------------------------------
 
     check_solution(
@@ -863,7 +1047,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Reshape output data
+    # Reshape nodal output data
     # --------------------------------------------------------
 
     nodal_displacements = \
