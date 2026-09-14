@@ -1,0 +1,18 @@
+Stiffness matrix symmetry check: PASS
+Residual check: PASS
+Free DOF reaction check: PASS
+
+Global stiffness matrix:
+[[ 2. -1. -1.  0.]
+ [-1.  3. -2.  0.]
+ [-1. -2.  5. -2.]
+ [ 0.  0. -2.  2.]]
+
+Nodal displacements:
+[ 0.          9.09090909 13.63636364  0.        ]
+
+Reaction forces:
+[-22.72727273   0.           0.         -27.27272727]
+
+Internal element forces:
+[np.float64(13.636363636363635), np.float64(9.09090909090909), np.float64(9.09090909090909), np.float64(-27.27272727272727)]
