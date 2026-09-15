@@ -896,8 +896,10 @@ def write_output(
             for value in values
         ]
 
+    filepath = Path(__file__).parent / filename
+
     with open(
-        filename,
+        filepath,
         "w"
     ) as file:
 
