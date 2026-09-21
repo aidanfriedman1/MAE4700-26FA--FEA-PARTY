@@ -13,6 +13,7 @@ def read_input(filename):
 
 
 def validate_inputs(coords, connectivity, k_values, loads, bcs):
+    # Coordinate width determines whether this is a 2D or 3D problem.
     if coords.ndim != 2 or coords.shape[1] not in (2, 3) or not len(coords):
         raise ValueError("nodal coordinates must have shape (num_nodes, 2 or 3)")
     num_nodes, ndim = coords.shape
@@ -41,6 +42,7 @@ def validate_inputs(coords, connectivity, k_values, loads, bcs):
 
 
 def node_dofs(node, ndim):
+    # Each node contributes ndim consecutive global displacement DOFs.
     return np.arange(node * ndim, (node + 1) * ndim, dtype=int)
 
 
@@ -49,6 +51,7 @@ def element_dofs(nodes, ndim):
 
 
 def element_geometry(x1, x2):
+    # The unit direction vector works for both 2D and 3D bars.
     dx = np.asarray(x2, dtype=float) - np.asarray(x1, dtype=float)
     length = np.linalg.norm(dx)
     if length <= 0:
@@ -57,17 +60,20 @@ def element_geometry(x1, x2):
 
 
 def element_operator(x1, x2):
+    # B projects element nodal displacements onto axial extension.
     length, direction = element_geometry(x1, x2)
     B = np.concatenate((-direction, direction))
     return length, direction, B
 
 
 def element_stiffness(x1, x2, k):
+    # The input k is EA/L; the outer product gives the global element matrix.
     _, _, B = element_operator(x1, x2)
     return k * np.outer(B, B)
 
 
 def assemble_global_stiffness(num_nodes, ndim, coords, connectivity, k_values):
+    # Add each element matrix into its corresponding global DOFs.
     K = np.zeros((num_nodes * ndim, num_nodes * ndim))
     for e, nodes in enumerate(connectivity):
         gdofs = element_dofs(nodes, ndim)
@@ -83,6 +89,7 @@ def build_force_vector(loads):
 
 
 def solve_system(K, F, bcs, ndim):
+    # None marks a free DOF; a number prescribes its displacement.
     u = np.zeros(len(F))
     fixed = []
     free = []
@@ -97,6 +104,7 @@ def solve_system(K, F, bcs, ndim):
     fixed = np.array(fixed, dtype=int)
     free = np.array(free, dtype=int)
     if len(free):
+        # Solve K_ff u_f = F_f - K_fe u_e, allowing nonzero prescribed motion.
         K_ff = K[np.ix_(free, free)]
         K_fe = K[np.ix_(free, fixed)]
         condition_number = np.linalg.cond(K_ff)
@@ -111,12 +119,14 @@ def solve_system(K, F, bcs, ndim):
 
 
 def recover_reactions(K, F, u, fixed):
+    # Reactions are the residual at prescribed DOFs only.
     reactions = np.zeros(len(F))
     reactions[fixed] = (K @ u - F)[fixed]
     return reactions
 
 
 def recover_element_forces(coords, connectivity, k_values, u, ndim):
+    # Positive axial force denotes tension; negative denotes compression.
     forces = []
     for e, nodes in enumerate(connectivity):
         _, _, B = element_operator(coords[nodes[0]], coords[nodes[1]])
@@ -125,6 +135,7 @@ def recover_element_forces(coords, connectivity, k_values, u, ndim):
 
 
 def check_solution(K, F, u, reactions, free, ndim):
+    # Check symmetry, the free-DOF equations, and overall force balance.
     if not np.allclose(K, K.T):
         raise ValueError("Global stiffness symmetry check failed")
     residual = K @ u - F
@@ -142,12 +153,14 @@ def write_output(filename, values):
 
 
 def main():
+    # Read the same five raw-Python-list files used by the HW2 solver.
     coords = np.asarray(read_input("nodal_coordinates.txt"), dtype=float)
     connectivity = read_input("connectivity_array.txt")
     k_values = np.asarray(read_input("element_stiffnesses.txt"), dtype=float)
     loads = np.asarray(read_input("external_nodal_forces.txt"), dtype=float)
     bcs = read_input("displacement_BCs.txt")
     num_nodes, ndim = validate_inputs(coords, connectivity, k_values, loads, bcs)
+    # Every later DOF count and output shape uses the detected dimension.
     print(f"Input validation: PASS ({ndim}D, {num_nodes} nodes, {len(connectivity)} elements)")
     F = build_force_vector(loads)
     K = assemble_global_stiffness(num_nodes, ndim, coords, connectivity, k_values)
@@ -158,6 +171,7 @@ def main():
     displacements = u.reshape(num_nodes, ndim)
     reaction_forces = reactions.reshape(num_nodes, ndim)
     write_output("nodal_displacements.txt", displacements)
+    # Write lists so the output can be read back with ast.literal_eval.
     write_output("reaction_forces.txt", reaction_forces)
     write_output("internal_forces.txt", forces)
     print("\nGlobal stiffness matrix:\n", K)
