@@ -114,15 +114,17 @@ def build_force_vector(loads):
 
 def assemble_thermal_force(num_nodes, ndim, coords, connectivity, k_values, alpha, delta_t):
     # For each element:
-    # N = k * (B u - alpha*DeltaT)
+    # N = k * (B u - alpha*DeltaT*L)
     # Therefore K u = F_external + F_thermal,
-    # where F_thermal = sum[k * B^T * alpha*DeltaT].
+    # where F_thermal = sum[k * B^T * alpha*DeltaT*L].
     F_thermal = np.zeros(num_nodes * ndim)
 
     for e, nodes in enumerate(connectivity):
-        _, _, B = element_operator(coords[nodes[0]], coords[nodes[1]])
+        length, _, B = element_operator(coords[nodes[0]], coords[nodes[1]])
         gdofs = element_dofs(nodes, ndim)
-        F_thermal[gdofs] += k_values[e] * B * alpha[e] * delta_t[e]
+        F_thermal[gdofs] += (
+            k_values[e] * B * alpha[e] * delta_t[e] * length
+        )
 
     return F_thermal
 
@@ -188,16 +190,16 @@ def recover_element_results(
     thermal = alpha is not None and delta_t is not None
 
     for e, nodes in enumerate(connectivity):
-        _, _, B = element_operator(coords[nodes[0]], coords[nodes[1]])
+        length, _, B = element_operator(coords[nodes[0]], coords[nodes[1]])
         ue = u[element_dofs(nodes, ndim)]
 
-        total_strain = float(B @ ue)
+        delta_L = float(B @ ue)
+        total_strain = delta_L / length
         thermal_strain = float(alpha[e] * delta_t[e]) if thermal else 0.0
         mechanical_strain = total_strain - thermal_strain
 
-        # k = EA/L, so E is not explicitly available in the Q3 input.
-        # The Q4 stress output is therefore calculated from N/A below.
-        force = float(k_values[e] * mechanical_strain)
+        # k = EA/L, so N = k*L*mechanical_strain.
+        force = float(k_values[e] * length * mechanical_strain)
 
         forces.append(force)
         total_strains.append(total_strain)
