@@ -11,14 +11,14 @@ def read_literal(filename):
 
 def read_inputs():
     """Load and check the eight standardized problem inputs."""
-    x_end = np.asarray(read_literal("nodal coordinates.txt"), dtype=float)
-    end_connectivity = read_literal("connectivity array.txt")
-    nnpe = read_literal("nodes per element.txt")
-    nq = read_literal("num quadrature points.txt")
-    p_expr = read_literal("p function.txt")
-    f_expr = read_literal("f function.txt")
-    point_sources = read_literal("point sources.txt")
-    boundary_conditions = read_literal("boundary conditions.txt")
+    x_end = np.asarray(read_literal("nodal_coordinates.txt"), dtype=float)
+    end_connectivity = read_literal("connectivity_array.txt")
+    nnpe = read_literal("nodes_per_element.txt")
+    nq = read_literal("num_quadrature_points.txt")
+    p_expr = read_literal("p_function.txt")
+    f_expr = read_literal("f_function.txt")
+    point_sources = read_literal("point_sources.txt")
+    boundary_conditions = read_literal("boundary_conditions.txt")
 
     if x_end.ndim != 1 or len(x_end) < 2 or not np.all(np.isfinite(x_end)):
         raise ValueError("Provide at least two finite end-node coordinates.")
@@ -226,9 +226,9 @@ def recover_end_derivatives(x_all, full_connectivity, d, nnpe):
 def write_outputs(nodal_solution, reactions, derivatives):
     """Write only plain Python lists, with the exact required filenames."""
     outputs = {
-        "nodal solution.txt": nodal_solution,
+        "nodal_solution.txt": nodal_solution,
         "reactions.txt": reactions,
-        "element derivatives.txt": derivatives,
+        "element_derivatives.txt": derivatives,
     }
     for filename, value in outputs.items():
         Path(filename).write_text(repr(value) + "\n", encoding="utf-8")
