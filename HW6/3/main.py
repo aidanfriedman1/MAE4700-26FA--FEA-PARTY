@@ -317,6 +317,19 @@ def main():
 
     d = solve_partitioned(K, F, essential_dofs, prescribed_values)
     residual = K @ d - F
+    # Identify all free DOFs
+    free_dofs = np.setdiff1d(
+    np.arange(len(d)), essential_dofs
+    )
+
+    # Calculate residuals at free DOFs
+    free_residual = residual[free_dofs]
+
+    # Maximum absolute residual
+    max_residual = np.max(np.abs(free_residual))
+
+    print("Free-DOF residuals:", free_residual)
+    print("Maximum free-DOF residual:", max_residual)
     reactions = [
         float(residual[left_dof]) if boundary_conditions[0][0] == "essential" else 0.0,
         float(residual[right_dof]) if boundary_conditions[1][0] == "essential" else 0.0,
