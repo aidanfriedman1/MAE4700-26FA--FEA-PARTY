@@ -282,13 +282,13 @@ def write_output(filename, values):
 # -----------------------------------------------------------------------------
 def main():
     # Read the seven standard HW8 Question 5 input files.
-    coords = np.asarray(read_input("nodal coordinates.txt"), dtype=float)
-    connectivity = read_input("connectivity array.txt")
-    axial_stiffnesses = np.asarray(read_input("element stiffnesses.txt"), dtype=float)
-    flexural_rigidities = np.asarray(read_input("element flexural rigidities.txt"), dtype=float)
-    distributed_loads = np.asarray(read_input("distributed loads.txt"), dtype=float)
-    nodal_loads = np.asarray(read_input("external nodal forces.txt"), dtype=float)
-    bcs = read_input("displacement BCs.txt")
+    coords = np.asarray(read_input("nodal_coordinates.txt"), dtype=float)
+    connectivity = read_input("connectivity_array.txt")
+    axial_stiffnesses = np.asarray(read_input("element_stiffnesses.txt"), dtype=float)
+    flexural_rigidities = np.asarray(read_input("element_flexural_rigidities.txt"), dtype=float)
+    distributed_loads = np.asarray(read_input("distributed_loads.txt"), dtype=float)
+    nodal_loads = np.asarray(read_input("external_nodal_forces.txt"), dtype=float)
+    bcs = read_input("displacement_BCs.txt")
 
     num_nodes, num_elements = validate_inputs(
         coords, connectivity, axial_stiffnesses, flexural_rigidities,
@@ -314,9 +314,9 @@ def main():
     reaction_forces = reactions.reshape(num_nodes, 3)
 
     # Exact required output filenames and list formats from the HW8 handout.
-    write_output("nodal displacements.txt", nodal_displacements)
-    write_output("reaction forces.txt", reaction_forces)
-    write_output("internal forces.txt", internal_forces)
+    write_output("nodal_displacements.txt", nodal_displacements)
+    write_output("reaction_forces.txt", reaction_forces)
+    write_output("internal_forces.txt", internal_forces)
 
     print("\nNodal displacements [ux, uy, theta]:\n", nodal_displacements)
     print("\nReaction forces/moments [Rx, Ry, Mz]:\n", reaction_forces)
