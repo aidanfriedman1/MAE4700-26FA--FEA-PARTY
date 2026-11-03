@@ -424,11 +424,11 @@ def main():
                    applied_loads, essential_bcs, out)
 
     # Write five raw Python lists. Shared-element interface points are retained.
-    write_list("nodal displacements.txt", out["nodal"])
-    write_list("reaction forces.txt", out["reactions"])
+    write_list("nodal_displacements.txt", out["nodal"])
+    write_list("reaction_forces.txt", out["reactions"])
     write_list("displacement.txt", out["displacement"])
-    write_list("bending moment.txt", out["moment"])
-    write_list("shear force.txt", out["shear"])
+    write_list("bending_moment.txt", out["moment"])
+    write_list("shear_force.txt", out["shear"])
     print("Beam solution complete. Wrote all five required output files.")
 
 
