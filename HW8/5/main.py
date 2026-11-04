@@ -1,328 +1,282 @@
+import os
+# Keep BLAS single-threaded (set BEFORE importing numpy); avoids some silent Windows crashes.
+for _v in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+os.environ.setdefault("MKL_THREADING_LAYER", "SEQUENTIAL")
+
+import faulthandler
+faulthandler.enable()  # prints a Python traceback even on a native crash
+
 import ast
+import traceback
 from pathlib import Path
 
 import numpy as np
 
-
-DIRECTORY = Path(__file__).resolve().parent
-
-
-# -----------------------------------------------------------------------------
-# Input and validation
-# -----------------------------------------------------------------------------
-def read_input(filename):
-    """Read one raw Python literal from the current run directory."""
-    with (DIRECTORY / filename).open("r", encoding="utf-8") as file:
-        return ast.literal_eval(file.read())
+# All seven input files must be in the same folder as this main.py file.
+HERE = Path(__file__).resolve().parent
 
 
-def validate_inputs(coords, connectivity, axial_stiffnesses, flexural_rigidities,
-                    distributed_loads, nodal_loads, bcs):
-    """Validate all seven HW8 Question 5 input files."""
-    if coords.ndim != 2 or coords.shape[1] != 2 or coords.shape[0] < 2:
-        raise ValueError("nodal coordinates must have shape (num_nodes, 2)")
-    if not np.all(np.isfinite(coords)):
-        raise ValueError("nodal coordinates must contain only finite values")
-
-    num_nodes = len(coords)
-    if not isinstance(connectivity, list) or not connectivity:
-        raise ValueError("connectivity array must be a nonempty list")
-    num_elements = len(connectivity)
-
-    for e, nodes in enumerate(connectivity):
-        if (not isinstance(nodes, list) or len(nodes) != 2
-                or any(type(node) is not int for node in nodes)):
-            raise ValueError(f"element {e} connectivity must be [node1, node2] integers")
-        if any(node < 0 or node >= num_nodes for node in nodes):
-            raise ValueError(f"element {e} contains an invalid node index")
-        if nodes[0] == nodes[1]:
-            raise ValueError(f"element {e} connects a node to itself")
-        element_geometry(coords[nodes[0]], coords[nodes[1]])
-
-    if axial_stiffnesses.shape != (num_elements,):
-        raise ValueError("element stiffnesses must contain one EA/L value per element")
-    if (not np.all(np.isfinite(axial_stiffnesses))
-            or np.any(axial_stiffnesses <= 0.0)):
-        raise ValueError("all element axial stiffnesses EA/L must be positive and finite")
-
-    if flexural_rigidities.shape != (num_elements,):
-        raise ValueError("element flexural rigidities must contain one EI value per element")
-    if (not np.all(np.isfinite(flexural_rigidities))
-            or np.any(flexural_rigidities <= 0.0)):
-        raise ValueError("all element flexural rigidities EI must be positive and finite")
-
-    if distributed_loads.shape != (num_elements,) or not np.all(np.isfinite(distributed_loads)):
-        raise ValueError("distributed loads must contain one finite constant p value per element")
-
-    if nodal_loads.shape != (num_nodes, 3) or not np.all(np.isfinite(nodal_loads)):
-        raise ValueError("external nodal forces must have shape (num_nodes, 3) and be finite")
-
-    if not isinstance(bcs, list) or len(bcs) != num_nodes:
-        raise ValueError("displacement BCs must contain one [ux, uy, theta] list per node")
-    for node, values in enumerate(bcs):
-        if not isinstance(values, list) or len(values) != 3:
-            raise ValueError(f"node {node} boundary conditions must contain [ux, uy, theta]")
-        for value in values:
-            if value is not None:
-                if (not isinstance(value, (int, float))
-                        or not np.isfinite(value)):
-                    raise ValueError("boundary-condition entries must be finite numbers or None")
-
-    return num_nodes, num_elements
+def mm(a, b):
+    """Matrix product without BLAS."""
+    return np.einsum("ij,jk->ik", a, b)
 
 
-# -----------------------------------------------------------------------------
-# Element geometry, DOFs, and coordinate transformation
-# -----------------------------------------------------------------------------
+def mv(a, x):
+    """Matrix-vector product without BLAS."""
+    return np.einsum("ij,j->i", a, x)
+
+
+def solve_dense(A, b):
+    """Gaussian elimination with partial pivoting (no LAPACK). Returns x, min |pivot|/max |A|."""
+    A = np.array(A, dtype=float)
+    b = np.array(b, dtype=float)
+    n = len(b)
+    amax = np.max(np.abs(A))
+    minpiv = np.inf
+    for k in range(n):
+        m = k + int(np.argmax(np.abs(A[k:, k])))
+        if m != k:
+            A[[k, m]] = A[[m, k]]
+            b[[k, m]] = b[[m, k]]
+        piv = A[k, k]
+        minpiv = min(minpiv, abs(piv))
+        if abs(piv) < 1e-12 * amax:
+            raise ValueError("Reduced stiffness matrix is singular; check supports and connectivity")
+        f = A[k+1:, k] / piv
+        A[k+1:, k:] -= f[:, None] * A[k, k:][None, :]
+        b[k+1:] -= f * b[k]
+    x = np.zeros(n)
+    for k in range(n - 1, -1, -1):
+        x[k] = (b[k] - np.dot(A[k, k+1:], x[k+1:])) / A[k, k]
+    return x, minpiv / amax
+
+
+def read_list(filename):
+    path = HERE / filename
+    if not path.is_file():
+        raise FileNotFoundError(f"Required input file not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        return ast.literal_eval(f.read())
+
+
 def element_geometry(x1, x2):
-    """Return length L and direction cosines c=cos(angle), s=sin(angle)."""
     delta = np.asarray(x2, dtype=float) - np.asarray(x1, dtype=float)
-    length = float(np.linalg.norm(delta))
-    if not np.isfinite(length) or length <= 0.0:
-        raise ValueError("frame element has zero or invalid length")
-    c = float(delta[0] / length)
-    s = float(delta[1] / length)
-    return length, c, s
+    L = float(np.linalg.norm(delta))
+    if L <= 0.0:
+        raise ValueError("An element has zero length.")
+    return L, delta[0] / L, delta[1] / L
 
 
-def element_dofs(nodes):
-    """Global DOF indices for [ux1, uy1, theta1, ux2, uy2, theta2]."""
+def dofs_for(nodes):
     i, j = nodes
-    return np.array([3*i, 3*i + 1, 3*i + 2,
-                     3*j, 3*j + 1, 3*j + 2], dtype=int)
+    return np.array([3*i, 3*i+1, 3*i+2, 3*j, 3*j+1, 3*j+2], dtype=int)
 
 
-def transformation_matrix(c, s):
-    """Map global element displacements to local element displacements: d' = T d."""
-    node_transform = np.array([
-        [ c,  s, 0.0],
-        [-s,  c, 0.0],
-        [0.0, 0.0, 1.0]
-    ])
+def transformation(c, s):
+    R = np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]])
     T = np.zeros((6, 6))
-    T[:3, :3] = node_transform
-    T[3:, 3:] = node_transform
+    T[:3, :3] = R
+    T[3:, 3:] = R
     return T
 
 
-# -----------------------------------------------------------------------------
-# Local frame element stiffness and consistent distributed-load vector
-# -----------------------------------------------------------------------------
-def local_element_stiffness(length, axial_stiffness, EI):
-    """Build the 6x6 local frame stiffness in [u1,w1,th1,u2,w2,th2] order.
-
-    axial_stiffness is the input EA/L (not EA). EI is the flexural rigidity.
-    """
-    L = length
-    k_local = np.zeros((6, 6))
-
-    # Axial truss contribution, local DOFs u1 and u2 (indices 0 and 3).
-    axial = axial_stiffness * np.array([[1.0, -1.0], [-1.0, 1.0]])
-    k_local[np.ix_([0, 3], [0, 3])] = axial
-
-    # Euler-Bernoulli bending contribution, local DOFs [w1, th1, w2, th2].
-    bending = (EI / L**3) * np.array([
-        [12.0,       6.0*L,  -12.0,       6.0*L],
-        [6.0*L,  4.0*L**2,   -6.0*L,  2.0*L**2],
-        [-12.0,     -6.0*L,   12.0,      -6.0*L],
-        [6.0*L,  2.0*L**2,   -6.0*L,  4.0*L**2]
+def local_stiffness(L, EA_over_L, EI):
+    k = np.zeros((6, 6), dtype=float)
+    ka = EA_over_L * np.array([[1.0, -1.0], [-1.0, 1.0]])
+    k[np.ix_([0, 3], [0, 3])] = ka
+    kb = (EI / L**3) * np.array([
+        [12.0, 6.0*L, -12.0, 6.0*L],
+        [6.0*L, 4.0*L**2, -6.0*L, 2.0*L**2],
+        [-12.0, -6.0*L, 12.0, -6.0*L],
+        [6.0*L, 2.0*L**2, -6.0*L, 4.0*L**2],
     ])
-    bending_dofs = [1, 2, 4, 5]
-    k_local[np.ix_(bending_dofs, bending_dofs)] = bending
-    return k_local
+    k[np.ix_([1, 2, 4, 5], [1, 2, 4, 5])] = kb
+    return k
 
 
-def local_distributed_load(length, p):
-    """Consistent local load for constant p acting in the local +y' direction."""
-    L = length
-    return (p * L / 2.0) * np.array([
-        0.0, 1.0, L / 6.0,
-        0.0, 1.0, -L / 6.0
-    ])
+def local_load(L, p):
+    # p is constant load per unit length in the local +y direction.
+    return (p * L / 2.0) * np.array([0.0, 1.0, L/6.0, 0.0, 1.0, -L/6.0])
 
 
-def frame_element_matrices(x1, x2, axial_stiffness, EI, p):
-    """Return local/global stiffness, transform, and local/global element loads."""
-    L, c, s = element_geometry(x1, x2)
-    T = transformation_matrix(c, s)
-    k_local = local_element_stiffness(L, axial_stiffness, EI)
-    f_local = local_distributed_load(L, p)
-    k_global = T.T @ k_local @ T
-    f_global = T.T @ f_local
-    return L, T, k_local, f_local, k_global, f_global
+def interpolate(L, c, s, dl, xi):
+    """Global displacement (ux, uy) at natural coordinate xi in [0,1] along an element."""
+    ulocal = (1.0 - xi)*dl[0] + xi*dl[3]
+    N1 = 1.0 - 3.0*xi**2 + 2.0*xi**3
+    N2 = L*(xi - 2.0*xi**2 + xi**3)
+    N3 = 3.0*xi**2 - 2.0*xi**3
+    N4 = L*(-xi**2 + xi**3)
+    wlocal = N1*dl[1] + N2*dl[2] + N3*dl[4] + N4*dl[5]
+    return c*ulocal - s*wlocal, s*ulocal + c*wlocal
 
 
-# -----------------------------------------------------------------------------
-# Global assembly and solution
-# -----------------------------------------------------------------------------
-def assemble_global_system(num_nodes, coords, connectivity, axial_stiffnesses,
-                           flexural_rigidities, distributed_loads):
-    """Assemble global K and the equivalent nodal loads from element p loads."""
-    num_dofs = 3 * num_nodes
-    K = np.zeros((num_dofs, num_dofs))
-    F_distributed = np.zeros(num_dofs)
+def main():
+    print("Reading inputs...", flush=True)
+    coords = np.asarray(read_list("nodal_coordinates.txt"), dtype=float)
+    conn = read_list("connectivity_array.txt")
+    EA_L = np.asarray(read_list("element_stiffnesses.txt"), dtype=float)
+    EI = np.asarray(read_list("element_flexural_rigidities.txt"), dtype=float)
+    p = np.asarray(read_list("distributed_loads.txt"), dtype=float)
+    nodal_loads = np.asarray(read_list("external_nodal_forces.txt"), dtype=float)
+    bcs = read_list("displacement_BCs.txt")
 
-    for e, nodes in enumerate(connectivity):
-        gdofs = element_dofs(nodes)
-        _, _, _, _, ke_global, fe_global = frame_element_matrices(
-            coords[nodes[0]], coords[nodes[1]],
-            axial_stiffnesses[e], flexural_rigidities[e], distributed_loads[e]
-        )
-        if not np.allclose(ke_global, ke_global.T, rtol=1e-10, atol=1e-10):
-            raise ValueError(f"element {e} global stiffness matrix is not symmetric")
-        K[np.ix_(gdofs, gdofs)] += ke_global
-        F_distributed[gdofs] += fe_global
+    nnode = len(coords)
+    nelem = len(conn)
+    if coords.shape != (nnode, 2) or nnode < 2:
+        raise ValueError("nodal_coordinates.txt must be a list of [x,y] coordinates")
+    if EA_L.shape != (nelem,) or EI.shape != (nelem,) or p.shape != (nelem,):
+        raise ValueError("Each element input file must contain exactly one value per element")
+    if nodal_loads.shape != (nnode, 3):
+        raise ValueError("external_nodal_forces.txt must have one [Fx,Fy,M] row per node")
+    if len(bcs) != nnode or any(len(row) != 3 for row in bcs):
+        raise ValueError("displacement_BCs.txt must have one [ux,uy,theta] row per node")
+    if np.any(EA_L <= 0) or np.any(EI <= 0):
+        raise ValueError("All EA/L and EI values must be positive")
+    for e, pair in enumerate(conn):
+        if len(pair) != 2 or pair[0] == pair[1] or min(pair) < 0 or max(pair) >= nnode:
+            raise ValueError(f"Invalid connectivity for element {e}: {pair}")
 
-    return K, F_distributed
+    print(f"Input validation: PASS ({nnode} nodes, {nelem} frame elements)", flush=True)
 
+    # ---------------- Assembly (each element assembled exactly once) ----------------
+    ndof = 3 * nnode
+    K = np.zeros((ndof, ndof))
+    Fdist = np.zeros(ndof)
+    element_data = []
 
-def build_global_force_vector(nodal_loads, F_distributed):
-    """Combine applied nodal forces/moments and equivalent distributed loads."""
-    return nodal_loads.reshape(-1).copy() + F_distributed
+    for e, nodes in enumerate(conn):
+        i, j = nodes
+        L, c, s = element_geometry(coords[i], coords[j])
+        T = transformation(c, s)
+        kl = local_stiffness(L, EA_L[e], EI[e])
+        fl = local_load(L, p[e])
+        kg = mm(mm(T.T, kl), T)
+        fg = mv(T.T, fl)
+        edofs = dofs_for(nodes)
+        K[np.ix_(edofs, edofs)] += kg
+        Fdist[edofs] += fg
+        element_data.append((L, c, s, T, kl, fl, edofs))
+    print("Assembly complete.", flush=True)
 
-
-def solve_system(K, F, bcs):
-    """Solve the partitioned system, allowing nonzero prescribed DOF values."""
-    u = np.zeros(len(F))
-    fixed = []
-    free = []
-
-    for node, values in enumerate(bcs):
-        for local_dof, value in enumerate(values):
-            gdof = 3 * node + local_dof
+    # ---------------- Boundary conditions and solve ----------------
+    F = nodal_loads.reshape(-1) + Fdist
+    u = np.zeros(ndof)
+    fixed, free = [], []
+    for node, row in enumerate(bcs):
+        for local_dof, value in enumerate(row):
+            gdof = 3*node + local_dof
             if value is None:
                 free.append(gdof)
             else:
                 fixed.append(gdof)
                 u[gdof] = float(value)
-
     fixed = np.asarray(fixed, dtype=int)
     free = np.asarray(free, dtype=int)
+    if len(free) == 0:
+        raise ValueError("No free degrees of freedom: check displacement_BCs.txt")
 
-    if len(free):
-        K_ff = K[np.ix_(free, free)]
-        K_fe = K[np.ix_(free, fixed)]
-        condition_number = np.linalg.cond(K_ff)
-        print("K_FF condition number:", condition_number)
-        if not np.isfinite(condition_number) or condition_number > 1e12:
-            raise ValueError(
-                "K_FF is singular or ill-conditioned. Check supports, mechanisms, "
-                "and disconnected nodes."
-            )
-        try:
-            u[free] = np.linalg.solve(K_ff, F[free] - K_fe @ u[fixed])
-        except np.linalg.LinAlgError as exc:
-            raise ValueError("K_FF is singular; check the frame constraints and connectivity") from exc
+    Kff = K[np.ix_(free, free)]
+    rhs = F[free] - mv(K[np.ix_(free, fixed)], u[fixed])
+    print("Solving system...", flush=True)
+    u[free], pivrat = solve_dense(Kff, rhs)
+    print(f"Solve complete (min pivot / max stiffness = {pivrat:.3e})", flush=True)
 
-    return u, free, fixed
+    reactions = mv(K, u) - F
+    reactions[free] = 0.0
 
+    # ---------------- Checks ----------------
+    residual = (mv(K, u) - F)[free]
+    scale = max(1.0, np.max(np.abs(F)))
+    if np.max(np.abs(residual)) > 1e-8 * scale:
+        raise RuntimeError(f"Free-DOF residual is not zero: max = {np.max(np.abs(residual)):.6e}")
+    if not np.allclose(K, K.T, atol=1e-7, rtol=1e-10):
+        raise RuntimeError("Global stiffness matrix is not symmetric")
 
-def recover_reactions(K, F, u, fixed):
-    """Return reactions at prescribed DOFs; entries at free DOFs are zero."""
-    reactions = np.zeros(len(F))
-    reactions[fixed] = (K @ u - F)[fixed]
-    return reactions
+    # ---------------- Element end forces: k*d - f ----------------
+    local_end_forces = []
+    for L, c, s, T, kl, fl, edofs in element_data:
+        dlocal = mv(T, u[edofs])
+        local_end_forces.append((mv(kl, dlocal) - fl).tolist())
 
+    disp = u.reshape(nnode, 3)
+    react = reactions.reshape(nnode, 3)
+    endf = np.asarray(local_end_forces, dtype=float)
 
-# -----------------------------------------------------------------------------
-# Element force recovery and numerical checks
-# -----------------------------------------------------------------------------
-def recover_element_forces(coords, connectivity, axial_stiffnesses,
-                           flexural_rigidities, distributed_loads, u):
-    """Recover local end forces: k_local d_local - f_local."""
-    element_forces = []
-    for e, nodes in enumerate(connectivity):
-        gdofs = element_dofs(nodes)
-        L, T, k_local, f_local, _, _ = frame_element_matrices(
-            coords[nodes[0]], coords[nodes[1]],
-            axial_stiffnesses[e], flexural_rigidities[e], distributed_loads[e]
-        )
-        d_global = u[gdofs]
-        d_local = T @ d_global
-        q_local = k_local @ d_local - f_local
-        element_forces.append([float(value) for value in q_local])
-    return element_forces
+    (HERE / "nodal_displacements.txt").write_text(repr(disp.tolist()), encoding="utf-8")
+    (HERE / "reaction_forces.txt").write_text(repr(react.tolist()), encoding="utf-8")
+    (HERE / "internal_forces.txt").write_text(repr(local_end_forces), encoding="utf-8")
 
+    np.set_printoptions(precision=6, suppress=False, linewidth=140)
+    print("\nCHECKS: stiffness symmetry PASS; free-DOF residual PASS")
+    print("\nNodal displacements [ux (m), uy (m), theta (rad)]:")
+    for n, row in enumerate(disp, start=1):
+        print(f"Node {n}: {row}")
+    print("\nSupport reactions [Rx (N), Ry (N), Mz (N m)]:")
+    for n, row in enumerate(react, start=1):
+        print(f"Node {n}: {row}")
+    print("\nMember end forces [N1, V1, M1, N2, V2, M2]:")
+    for e, row in enumerate(endf, start=1):
+        print(f"Element {e}: {row}")
+        print(f"  max |axial| = {max(abs(row[0]), abs(row[3])):.6g} N")
+        print(f"  max |shear| = {max(abs(row[1]), abs(row[4])):.6g} N")
+        print(f"  end moments = {row[2]:.6g}, {row[5]:.6g} N m")
 
-def check_solution(K, F, u, reactions, free, coords, num_nodes):
-    """Check stiffness symmetry, free-DOF residual, and global force/moment balance."""
-    if not np.allclose(K, K.T, rtol=1e-9, atol=1e-8):
-        raise ValueError("global stiffness symmetry check failed")
+    # ---------------- Max interpolated displacement ----------------
+    best = {"mag": -1.0, "element": None, "xi": None, "xy": None}
+    for e, (nodes, data) in enumerate(zip(conn, element_data), start=1):
+        L, c, s, T, kl, fl, edofs = data
+        i, j = nodes
+        dl = mv(T, u[edofs])
+        for xi in np.linspace(0.0, 1.0, 1001):
+            ux, uy = interpolate(L, c, s, dl, xi)
+            mag = float(np.hypot(ux, uy))
+            if mag > best["mag"]:
+                best = {"mag": mag, "element": e, "xi": float(xi),
+                        "xy": (coords[i] + xi*(coords[j]-coords[i])).tolist()}
+    print(f"\nMaximum interpolated translational displacement: {best['mag']:.8e} m "
+          f"on element {best['element']} at xi = {best['xi']:.4f}, "
+          f"global position = {best['xy']} m")
 
-    residual = K @ u - F
-    if len(free) and not np.allclose(residual[free], 0.0, rtol=1e-7, atol=1e-7):
-        raise ValueError("free-DOF equilibrium residual check failed")
+    # ---------------- Optional deformed-shape plot ----------------
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        umax = max(np.max(np.abs(disp[:, :2])), 1e-300)
+        span = max(np.ptp(coords[:, 0]), np.ptp(coords[:, 1]))
+        scale_plot = 0.1 * span / umax
+        fig, ax = plt.subplots(figsize=(6, 7))
+        for (nodes, data) in zip(conn, element_data):
+            L, c, s, T, kl, fl, edofs = data
+            i, j = nodes
+            ax.plot(*zip(coords[i], coords[j]), "--", color="gray", lw=1)
+            dl = mv(T, u[edofs])
+            pts = []
+            for xi in np.linspace(0, 1, 60):
+                ux, uy = interpolate(L, c, s, dl, xi)
+                base = coords[i] + xi*(coords[j]-coords[i])
+                pts.append([base[0] + scale_plot*ux, base[1] + scale_plot*uy])
+            pts = np.array(pts)
+            ax.plot(pts[:, 0], pts[:, 1], "b-", lw=2)
+        for n, (x, y) in enumerate(coords, start=1):
+            ax.annotate(str(n), (x, y), textcoords="offset points", xytext=(-10, 4))
+        ax.set_aspect("equal")
+        ax.set_title(f"Deformed shape (displacements x {scale_plot:.0f})")
+        ax.set_xlabel("x (m)"); ax.set_ylabel("y (m)")
+        fig.savefig(HERE / "deformed_shape.png", dpi=150, bbox_inches="tight")
+        print("Wrote deformed_shape.png")
+    except Exception as exc:  # plotting is optional
+        print(f"(Skipped deformed-shape plot: {exc})")
 
-    # F includes the transformed consistent element loads, so its nodal
-    # force/moment resultant can be checked about the global origin.
-    total = (F + reactions).reshape(num_nodes, 3)
-    sum_fx = float(np.sum(total[:, 0]))
-    sum_fy = float(np.sum(total[:, 1]))
-    sum_mz = float(np.sum(total[:, 2] + coords[:, 0] * total[:, 1]
-                           - coords[:, 1] * total[:, 0]))
-    resultant = np.array([sum_fx, sum_fy, sum_mz])
-    scale = max(1.0, float(np.linalg.norm(F)), float(np.linalg.norm(reactions)))
-    if not np.allclose(resultant, 0.0, rtol=1e-8, atol=1e-7 * scale):
-        raise ValueError(f"global force/moment equilibrium check failed: {resultant}")
-
-    print("Global stiffness symmetry: PASS")
-    print("Free-DOF residual: PASS")
-    print("Global force and moment equilibrium: PASS")
-
-
-def write_output(filename, values):
-    """Write output as a raw Python list of built-in floats."""
-    if isinstance(values, np.ndarray):
-        values = values.tolist()
-    (DIRECTORY / filename).write_text(repr(values), encoding="utf-8")
-
-
-# -----------------------------------------------------------------------------
-# Main program
-# -----------------------------------------------------------------------------
-def main():
-    # Read the seven standard HW8 Question 5 input files.
-    coords = np.asarray(read_input("nodal_coordinates.txt"), dtype=float)
-    connectivity = read_input("connectivity_array.txt")
-    axial_stiffnesses = np.asarray(read_input("element_stiffnesses.txt"), dtype=float)
-    flexural_rigidities = np.asarray(read_input("element_flexural_rigidities.txt"), dtype=float)
-    distributed_loads = np.asarray(read_input("distributed_loads.txt"), dtype=float)
-    nodal_loads = np.asarray(read_input("external_nodal_forces.txt"), dtype=float)
-    bcs = read_input("displacement_BCs.txt")
-
-    num_nodes, num_elements = validate_inputs(
-        coords, connectivity, axial_stiffnesses, flexural_rigidities,
-        distributed_loads, nodal_loads, bcs
-    )
-    print(f"Input validation: PASS ({num_nodes} nodes, {num_elements} frame elements)")
-
-    K, F_distributed = assemble_global_system(
-        num_nodes, coords, connectivity, axial_stiffnesses,
-        flexural_rigidities, distributed_loads
-    )
-    F = build_global_force_vector(nodal_loads, F_distributed)
-
-    u, free, fixed = solve_system(K, F, bcs)
-    reactions = recover_reactions(K, F, u, fixed)
-    internal_forces = recover_element_forces(
-        coords, connectivity, axial_stiffnesses,
-        flexural_rigidities, distributed_loads, u
-    )
-    check_solution(K, F, u, reactions, free, coords, num_nodes)
-
-    nodal_displacements = u.reshape(num_nodes, 3)
-    reaction_forces = reactions.reshape(num_nodes, 3)
-
-    # Exact required output filenames and list formats from the HW8 handout.
-    write_output("nodal_displacements.txt", nodal_displacements)
-    write_output("reaction_forces.txt", reaction_forces)
-    write_output("internal_forces.txt", internal_forces)
-
-    print("\nNodal displacements [ux, uy, theta]:\n", nodal_displacements)
-    print("\nReaction forces/moments [Rx, Ry, Mz]:\n", reaction_forces)
-    print("\nLocal element end forces [N1, V1, M1, N2, V2, M2]:\n",
-          np.asarray(internal_forces))
+    print("Wrote nodal_displacements.txt, reaction_forces.txt, and internal_forces.txt")
+    print(f"Output directory: {HERE}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        print("\nSOLVER FAILED. Full error details:", flush=True)
+        traceback.print_exc()
+        raise
