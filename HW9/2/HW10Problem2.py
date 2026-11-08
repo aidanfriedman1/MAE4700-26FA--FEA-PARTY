@@ -106,10 +106,9 @@ def plot_element_shape(xy, title):
 
 def physical_coordinates(shape, xy):
     """Map one parent-domain point to physical coordinates."""
-    raise NotImplementedError(
-        "Find the physical x and y coordinates using the shape functions "
-        "and global nodal coordinates."
-    )
+    # x = sum_i N_i x_i,  y = sum_i N_i y_i
+    # shape has length n, xy is n-by-2 -> returns [x, y]
+    return shape @ xy
 
 
 def shape_functions(xi, eta, nodes_per_element):
@@ -125,7 +124,20 @@ def shape_functions(xi, eta, nodes_per_element):
         )
 
     if nodes_per_element == 8:
-        raise NotImplementedError("Define the shape-function array for Q8 elements.")
+        # Serendipity Q8: corners 1-4, then midsides 5 (bottom), 6 (right),
+        # 7 (top), 8 (left).
+        return np.array(
+            [
+                -0.25 * (1.0 - xi) * (1.0 - eta) * (1.0 + xi + eta),
+                0.25 * (1.0 + xi) * (1.0 - eta) * (xi - eta - 1.0),
+                0.25 * (1.0 + xi) * (1.0 + eta) * (xi + eta - 1.0),
+                0.25 * (1.0 - xi) * (1.0 + eta) * (-xi + eta - 1.0),
+                0.5 * (1.0 - xi**2) * (1.0 - eta),
+                0.5 * (1.0 + xi) * (1.0 - eta**2),
+                0.5 * (1.0 - xi**2) * (1.0 + eta),
+                0.5 * (1.0 - xi) * (1.0 - eta**2),
+            ]
+        )
 
     raise ValueError("Only Q4 and Q8 elements are supported.")
 
@@ -133,9 +145,15 @@ def shape_functions(xi, eta, nodes_per_element):
 def shape_function_gradients(xi, eta, nodes_per_element):
     """Return shape-function gradients with respect to xi and eta."""
     if nodes_per_element == 4:
-        raise NotImplementedError(
-            "Define the shape-function gradient array for Q4 elements."
-        )
+        # Each row is [dN_i/dxi, dN_i/deta]; transpose to get 2-by-4.
+        return 0.25 * np.array(
+            [
+                [-(1.0 - eta), -(1.0 - xi)],
+                [(1.0 - eta), -(1.0 + xi)],
+                [(1.0 + eta), (1.0 + xi)],
+                [-(1.0 + eta), (1.0 - xi)],
+            ]
+        ).T
 
     if nodes_per_element == 8:
         # Each row below is [dN_i/dxi, dN_i/deta]; transpose to obtain
@@ -171,10 +189,8 @@ def shape_function_gradients(xi, eta, nodes_per_element):
 def jacobian_matrix(xi, eta, xy):
     """Return the Jacobian matrix at one parent-domain point."""
     gradients = shape_function_gradients(xi, eta, xy.shape[0])
-    raise NotImplementedError(
-        "Calculate the Jacobian matrix from the shape-function gradients "
-        "and global nodal coordinates."
-    )
+    # (2 x n) @ (n x 2) -> [[dx/dxi, dy/dxi], [dx/deta, dy/deta]]
+    return gradients @ xy
 
 
 def plot_jacobian(xi, eta, x, y, det_j, title):
