@@ -178,7 +178,7 @@ def main():
     print('Starting HW10Problem2',flush=True)
     all_paths=[]
     xy_q4=np.array([[2.,1.],[0.,0.],[1.,0.],[2.,-1.]])
-    print('Calculating Q4 element (Question 2a)...',flush=True)
+    print('Calculating Q4 element (Question 2a)',flush=True)
     all_paths += calculate_and_save(xy_q4,'Q4 element','a_q4')
     xy_q8=np.array([[0.,0.],[1.,0.],[1.,1.],[0.,1.],[.5,0.],[1.,.5],[.5,1.],[0.,.5]])
     print('Calculating baseline Q8 element...',flush=True)
