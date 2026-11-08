@@ -183,7 +183,7 @@ def main():
     xy_q8=np.array([[0.,0.],[1.,0.],[1.,1.],[0.,1.],[.5,0.],[1.,.5],[.5,1.],[0.,.5]])
     print('Calculating baseline Q8 element...',flush=True)
     all_paths += calculate_and_save(xy_q8,'Q8 element','b0_q8_baseline')
-    cases=[('b1_corner3_to_0.3_0.3',3,(.3,.3)),('b2_mid5_to_0.1_0',5,(.1,0.)),('b3_mid5_to_0.5_0.4_valid',5,(.5,.4)),('b4_mid6_to_1_0.9',6,(1.,.9))]
+    cases=[('b1_corner3_to_0.3_0.3',3,(.3,.3)),('b2_mid5_to_0.1_0',5,(.1,0.)),('b3_mid5_to_0.5_0.4_valid',5,(.5,.4)),('b4_mid6_to_1_0.9',6,(1.,.9),('b5_corner3_to_0.9_1', 3, (0.9, 1.0)))]
     for name,node,pos in cases:
         moved=xy_q8.copy(); moved[node-1]=pos
         print(f'Calculating {name}...',flush=True)
