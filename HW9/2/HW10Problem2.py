@@ -175,7 +175,7 @@ def calculate_and_save(xy, title, prefix):
 
 
 def main():
-    print('Starting HW10Problem2 (no Matplotlib, no BLAS/matrix multiplication)...',flush=True)
+    print('Starting HW10Problem2',flush=True)
     all_paths=[]
     xy_q4=np.array([[2.,1.],[0.,0.],[1.,0.],[2.,-1.]])
     print('Calculating Q4 element (Question 2a)...',flush=True)
