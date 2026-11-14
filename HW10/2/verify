@@ -1,0 +1,79 @@
+import numpy as np
+from main import solve_problem
+
+
+def check(actual, expected, name):
+    np.testing.assert_allclose(actual, expected, rtol=1e-11, atol=1e-11)
+    print(f"PASS: {name}")
+
+
+def test_T3_center_node():
+    # Square [-1,1]^2 split into four area-one triangles.
+    # Four boundary corners prescribed phi=0, one central free node.
+    # K_center,center=4, f_center=8/3, phi_center=2/3.
+    nodes = [[-1,-1],[1,-1],[1,1],[-1,1],[0,0]]
+    elements = [[0,1,4],[1,2,4],[2,3,4],[3,0,4]]
+    phi, stresses, torque = solve_problem(nodes, elements,
+                                         [0,0,0,0,None], [1]*4)
+    check(phi, [0,0,0,0,2/3], "T3 interior solution (phi_center=2/3)")
+    check(torque, 16/9, "T3 torque (16/9)")
+    check([row[2] for row in stresses],
+          [np.sqrt(3)*2/3]*4, "T3 centroid von Mises stress")
+
+
+def test_Q4_center_node():
+    # Unit square cells in a 2x2 grid, one free center node.
+    # K_center,center=8/3, f_center=2, phi_center=3/4.
+    nodes = [[-1,-1],[0,-1],[1,-1],
+             [-1, 0],[0, 0],[1, 0],
+             [-1, 1],[0, 1],[1, 1]]
+    elements = [[0,1,4,3],[1,2,5,4],[3,4,7,6],[4,5,8,7]]
+    phi, stresses, torque = solve_problem(nodes, elements,
+                                         [0,0,0,0,None,0,0,0,0], [1]*4)
+    check(phi[4], 3/4, "Q4 interior solution (phi_center=3/4)")
+    check(torque, 3/2, "Q4 torque (3/2)")
+    check([row[2] for row in stresses],
+          [3/4*np.sqrt(3/2)]*4, "Q4 centroid von Mises stress")
+
+
+def test_linear_patch_T3_and_Q4():
+    # Exact affine patch phi = x + 2y, with all nodes prescribed.
+    # This checks physical Jacobian gradients and stress conventions.
+    phi, stresses, torque = solve_problem(
+        [[0,0],[1,0],[0,1]], [[0,1,2]], [0,1,2], [0])
+    check(phi, [0,1,2], "T3 affine patch nodal values")
+    check(stresses[0], [2,-1,np.sqrt(15)], "T3 affine patch stress")
+    check(torque, 1, "T3 affine patch torque")
+
+    phi, stresses, torque = solve_problem(
+        [[0,0],[1,0],[1,1],[0,1]], [[0,1,2,3]],
+        [0,1,3,2], [0])
+    check(phi, [0,1,3,2], "Q4 affine patch nodal values")
+    check(stresses[0], [2,-1,np.sqrt(15)], "Q4 affine patch stress")
+    check(torque, 3, "Q4 affine patch torque")
+
+    # The same affine field on a nonrectangular, parallelogram Q4.
+    # Area=2, centroid=(1.5,0.5), so torque=2*area*(1.5+2*0.5)=10.
+    phi, stresses, torque = solve_problem(
+        [[0,0],[2,0],[3,1],[1,1]], [[0,1,2,3]],
+        [0,2,5,3], [0])
+    check(stresses[0], [2,-1,np.sqrt(15)], "Skew Q4 patch stress")
+    check(torque, 10, "Skew Q4 patch torque")
+
+
+def test_zero_loading():
+    nodes = [[0,0],[1,0],[1,1],[0,1],[0.5,0.5]]
+    elements = [[0,1,4],[1,2,4],[2,3,4],[3,0,4]]
+    phi, stresses, torque = solve_problem(nodes, elements,
+                                         [0,0,0,0,None], [0]*4)
+    check(phi, [0]*5, "T3 zero source, zero boundary phi")
+    check(stresses, [[0,0,0]]*4, "T3 zero source, zero stress")
+    check(torque, 0, "T3 zero source, zero torque")
+
+
+if __name__ == "__main__":
+    test_T3_center_node()
+    test_Q4_center_node()
+    test_linear_patch_T3_and_Q4()
+    test_zero_loading()
+    print("All verification tests passed.")
