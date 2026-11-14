@@ -1,0 +1,139 @@
+import matplotlib
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
+import matplotlib.tri as mtri
+import numpy as np
+from matplotlib.collections import PolyCollection
+
+from main import read_python_list, shape_functions, DIRECTORY
+
+
+def draw_element_edges(ax, nodes, connectivity):
+    for element in connectivity:
+        vertices = nodes[element]
+        closed = np.vstack((vertices, vertices[0]))
+        ax.plot(closed[:, 0], closed[:, 1], color="black", linewidth=0.4,
+                alpha=0.55, zorder=3)
+
+
+def format_axes(ax, title, nodes, connectivity):
+    draw_element_edges(ax, nodes, connectivity)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x (m, for SI inputs)")
+    ax.set_ylabel("y (m, for SI inputs)")
+    ax.set_title(title)
+    ax.margins(0.05)
+
+
+def refined_contour_mesh(nodes, connectivity, nodal_phi, subdivisions=8):
+    """Resolve Q4 bilinear interpolation, rather than splitting into 2 linear pieces.
+
+    For T3 the native linear triangle is already exact.
+    """
+    points, values, triangles = [], [], []
+    for element in connectivity:
+        element = np.asarray(element, dtype=int)
+        coords = nodes[element]
+        p_values = nodal_phi[element]
+        start = len(points)
+        if len(element) == 3:
+            points.extend(coords.tolist())
+            values.extend(p_values.tolist())
+            triangles.append([start, start + 1, start + 2])
+        else:
+            steps = subdivisions
+            for j in range(steps + 1):
+                eta = -1.0 + 2.0 * j / steps
+                for i in range(steps + 1):
+                    xi = -1.0 + 2.0 * i / steps
+                    N, _ = shape_functions("Q4", xi, eta)
+                    points.append((N @ coords).tolist())
+                    values.append(float(N @ p_values))
+            stride = steps + 1
+            for j in range(steps):
+                for i in range(steps):
+                    a = start + j * stride + i
+                    b = a + 1
+                    c = a + stride + 1
+                    d = a + stride
+                    triangles.extend([[a, b, c], [a, c, d]])
+    p = np.asarray(points, dtype=float)
+    triangulation = mtri.Triangulation(p[:, 0], p[:, 1],
+                                      np.asarray(triangles, dtype=int))
+    return triangulation, np.asarray(values, dtype=float)
+
+
+def plot_phi(nodes, connectivity, phi):
+    triangulation, phi_refined = refined_contour_mesh(nodes, connectivity, phi)
+    f_min = float(np.min(phi_refined))
+    f_max = float(np.max(phi_refined))
+    if np.isclose(f_min, f_max, rtol=0, atol=1e-14 * max(abs(f_min), abs(f_max), 1)):
+        width = max(abs(f_min), 1.0) * 1e-6
+        levels = np.linspace(f_min - width, f_max + width, 21)
+    else:
+        levels = np.linspace(f_min, f_max, 21)
+    fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
+    contour = ax.tricontourf(triangulation, phi_refined, levels=levels, cmap="viridis")
+    fig.colorbar(contour, ax=ax, label="Stress function, phi")
+    format_axes(ax, "Stress-function contour", nodes, connectivity)
+    fig.savefig(DIRECTORY / "phi_contour.png", dpi=200)
+    plt.close(fig)
+
+
+def plot_von_mises(nodes, connectivity, stresses):
+    fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
+    polygons = [nodes[element] for element in connectivity]
+    vm = stresses[:, 2]
+    collection = PolyCollection(polygons, array=vm, cmap="plasma",
+                                edgecolors="none")
+    ax.add_collection(collection)
+    ax.autoscale_view()
+    fig.colorbar(collection, ax=ax, label="von Mises stress (Pa, for SI inputs)")
+    format_axes(ax, "Element-centroid von Mises stress", nodes, connectivity)
+    fig.savefig(DIRECTORY / "von_mises_contour.png", dpi=200)
+    plt.close(fig)
+
+
+def plot_shear_vectors(nodes, connectivity, stresses):
+    centroids = []
+    for element in connectivity:
+        coords = nodes[element]
+        if len(element) == 3:
+            centroids.append(np.mean(coords, axis=0))
+        else:
+            N, _ = shape_functions("Q4", 0.0, 0.0)
+            centroids.append(N @ coords)
+    centroids = np.asarray(centroids)
+    tau_xz = stresses[:, 0]
+    tau_yz = stresses[:, 1]
+    magnitudes = np.hypot(tau_xz, tau_yz)
+    max_mag = float(max(np.max(magnitudes), 1e-30))
+    span = np.ptp(nodes, axis=0)
+    arrow_size = 0.18 * max(float(np.max(span)), 1e-30)
+    # All arrow lengths share a single scale factor, preserving relative magnitudes.
+    arrows_x = tau_xz / max_mag * arrow_size
+    arrows_y = tau_yz / max_mag * arrow_size
+
+    fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
+    art = ax.quiver(centroids[:, 0], centroids[:, 1], arrows_x, arrows_y,
+                    magnitudes, angles="xy", scale_units="xy", scale=1.0,
+                    cmap="viridis", width=0.005, zorder=5)
+    fig.colorbar(art, ax=ax, label="Shear stress magnitude (Pa, for SI inputs)")
+    format_axes(ax, "Shear-stress vectors (tau_xz, tau_yz)", nodes, connectivity)
+    fig.savefig(DIRECTORY / "shear_stress_vectors.png", dpi=200)
+    plt.close(fig)
+
+
+def main():
+    nodes = np.asarray(read_python_list("nodal_coordinates.txt"), dtype=float)
+    connectivity = read_python_list("connectivity_array.txt")
+    phi = np.asarray(read_python_list("nodal_phi.txt"), dtype=float)
+    stresses = np.asarray(read_python_list("element_stresses.txt"), dtype=float)
+    plot_phi(nodes, connectivity, phi)
+    plot_von_mises(nodes, connectivity, stresses)
+    plot_shear_vectors(nodes, connectivity, stresses)
+
+
+if __name__ == "__main__":
+    main()
