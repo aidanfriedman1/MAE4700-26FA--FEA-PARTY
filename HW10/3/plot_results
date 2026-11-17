@@ -1,0 +1,234 @@
+
+import matplotlib
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
+import matplotlib.tri as mtri
+import numpy as np
+
+from main import read_python_list, shape_functions, DIRECTORY
+
+
+def draw_element_edges(ax, nodes, connectivity):
+    for element in connectivity:
+        vertices = nodes[element]
+        closed = np.vstack((vertices, vertices[0]))
+        ax.plot(closed[:, 0], closed[:, 1], color="black", linewidth=0.6,
+                alpha=0.55, zorder=3)
+
+
+def format_axes(ax, title, nodes, connectivity):
+    draw_element_edges(ax, nodes, connectivity)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x (cm)")
+    ax.set_ylabel("y (cm)")
+    ax.set_title(title, fontsize=11)
+
+    x_min, y_min = np.min(nodes, axis=0)
+    x_max, y_max = np.max(nodes, axis=0)
+    x_pad = 0.05 * (x_max - x_min)
+    y_pad = 0.05 * (y_max - y_min)
+
+    ax.set_xlim(x_min - x_pad, x_max + x_pad)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+
+def element_centroids(nodes, connectivity):
+    centroids = []
+    for element in connectivity:
+        coords = nodes[element]
+        if len(element) == 3:
+            centroids.append(np.mean(coords, axis=0))
+        else:
+            N, _ = shape_functions("Q4", 0.0, 0.0)
+            centroids.append(N @ coords)
+    return np.asarray(centroids)
+
+
+def mark_heat_sources(ax, nodes, point_sources):
+    """Mark nonzero nodal heat sources using a red asterisk."""
+    for i, source in enumerate(point_sources):
+        if source != 0.0:
+            x, y = nodes[i]
+            ax.scatter(x, y, color="red", marker="$*$",
+                       s=250, zorder=8)
+
+
+def save_figure(fig, filename):
+    fig.savefig(DIRECTORY / filename, dpi=250,
+                bbox_inches="tight", pad_inches=0.15)
+    plt.close(fig)
+
+
+def plot_mesh(nodes, connectivity, convection_BCs, point_sources):
+    fig, ax = plt.subplots(figsize=(3.8, 8.5), constrained_layout=True)
+    format_axes(ax, "Mesh", nodes, connectivity)
+
+    # Label nodes with their numbers and coordinates.
+    for i, (x, y) in enumerate(nodes):
+        ax.scatter(x, y, color="royalblue", s=22, zorder=5)
+        ax.annotate(f"{i}\n({x:g}, {y:g})", (x, y),
+                    xytext=(0, 9), textcoords="offset points",
+                    ha="center", va="bottom", fontsize=8,
+                    fontweight="bold", color="black", zorder=6)
+
+    # Label elements at their centroids.
+    centroids = element_centroids(nodes, connectivity)
+    for i, (x, y) in enumerate(centroids):
+        ax.text(x, y, f"E{i + 1}", ha="center", va="center",
+                fontsize=10, fontweight="bold", color="black",
+                zorder=6)
+
+    # Highlight convection boundaries.
+    for node1, node2, h, T_inf in convection_BCs:
+        edge = nodes[[node1, node2]]
+        ax.plot(edge[:, 0], edge[:, 1], color="darkorange",
+                linewidth=3.0, zorder=4)
+
+    # Mark heating cables.
+    mark_heat_sources(ax, nodes, point_sources)
+
+    # Legend.
+    ax.scatter([], [], color="royalblue", s=22, label="Node")
+    ax.plot([], [], color="darkorange", linewidth=3,
+            label="Convection")
+    ax.scatter([], [], color="red", marker="$*$", s=200,
+               label="Heat source")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10),
+              fontsize=8, frameon=False, ncol=2)
+
+    # Adjust limits for node labels.
+    x_min, y_min = np.min(nodes, axis=0)
+    x_max, y_max = np.max(nodes, axis=0)
+    ax.set_xlim(x_min - 0.35, x_max + 0.35)
+    ax.set_ylim(y_min - 0.4, y_max + 0.7)
+
+    save_figure(fig, "mesh.png")
+
+
+def refined_contour_mesh(nodes, connectivity, temperatures, subdivisions=8):
+    """Resolve Q4 bilinear interpolation rather than splitting into 2 linear pieces.
+
+    For T3 the native linear triangle is already exact.
+    """
+    points, values, triangles = [], [], []
+    for element in connectivity:
+        element = np.asarray(element, dtype=int)
+        coords = nodes[element]
+        temperatures_element = temperatures[element]
+        start = len(points)
+
+        if len(element) == 3:
+            points.extend(coords.tolist())
+            values.extend(temperatures_element.tolist())
+            triangles.append([start, start + 1, start + 2])
+        else:
+            steps = subdivisions
+            for j in range(steps + 1):
+                eta = -1.0 + 2.0 * j / steps
+                for i in range(steps + 1):
+                    xi = -1.0 + 2.0 * i / steps
+                    N, _ = shape_functions("Q4", xi, eta)
+                    points.append((N @ coords).tolist())
+                    values.append(float(N @ temperatures_element))
+
+            stride = steps + 1
+            for j in range(steps):
+                for i in range(steps):
+                    a = start + j * stride + i
+                    b = a + 1
+                    c = a + stride + 1
+                    d = a + stride
+                    triangles.extend([[a, b, c], [a, c, d]])
+
+    p = np.asarray(points, dtype=float)
+    triangulation = mtri.Triangulation(p[:, 0], p[:, 1],
+                                      np.asarray(triangles, dtype=int))
+    return triangulation, np.asarray(values, dtype=float)
+
+
+def plot_temperature_and_flux(nodes, connectivity, temperatures,
+                              heat_fluxes, point_sources):
+    fig, (ax_temp, ax_flux) = plt.subplots(
+        1, 2, figsize=(7.5, 8.5), constrained_layout=True)
+
+    # Temperature contour.
+    triangulation, temperature_refined = refined_contour_mesh(
+        nodes, connectivity, temperatures)
+
+    t_min = float(np.min(temperature_refined))
+    t_max = float(np.max(temperature_refined))
+    if np.isclose(t_min, t_max):
+        width = max(abs(t_min), 1.0) * 1e-6
+        levels = np.linspace(t_min - width, t_max + width, 21)
+    else:
+        levels = np.linspace(t_min, t_max, 21)
+
+    contour = ax_temp.tricontourf(triangulation, temperature_refined,
+                                  levels=levels, cmap="inferno")
+    fig.colorbar(contour, ax=ax_temp, label="Temperature (°C)",
+                 fraction=0.07, pad=0.04)
+    format_axes(ax_temp, "Temperature Contour", nodes, connectivity)
+
+    # Heat-flux vectors at element centroids.
+    centroids = element_centroids(nodes, connectivity)
+    q_x = heat_fluxes[:, 0]
+    q_y = heat_fluxes[:, 1]
+    magnitudes = np.hypot(q_x, q_y)
+    max_mag = max(float(np.max(magnitudes)), 1e-30)
+
+    # Determine arrow size from element dimensions.
+    edge_lengths = []
+    for element in connectivity:
+        coords = nodes[element]
+        for i in range(len(coords)):
+            length = np.linalg.norm(
+                coords[(i + 1) % len(coords)] - coords[i])
+            edge_lengths.append(length)
+
+    min_edge_length = min(edge_lengths)
+    arrow_size = 0.65 * min_edge_length
+
+    # All arrows share one scale factor, preserving relative magnitudes.
+    arrows_x = q_x / max_mag * arrow_size
+    arrows_y = q_y / max_mag * arrow_size
+
+    vectors = ax_flux.quiver(centroids[:, 0], centroids[:, 1],
+                             arrows_x, arrows_y, magnitudes,
+                             angles="xy", scale_units="xy", scale=1.0,
+                             pivot="mid", cmap="viridis", width=0.012,
+                             headwidth=4.5, headlength=6.0,
+                             headaxislength=5.0, zorder=5)
+
+    fig.colorbar(vectors, ax=ax_flux, label="Heat Flux (W/cm²)",
+                 fraction=0.07, pad=0.04)
+    format_axes(ax_flux, "Heat-Flux Vectors", nodes, connectivity)
+
+    # Mark heating cables on both plots.
+    mark_heat_sources(ax_temp, nodes, point_sources)
+    mark_heat_sources(ax_flux, nodes, point_sources)
+
+    save_figure(fig, "temperature_and_heat_flux.png")
+
+
+def main():
+    nodes = np.asarray(read_python_list("nodal_coordinates.txt"), dtype=float)
+    connectivity = np.asarray(read_python_list("connectivity_array.txt"), dtype=int)
+    convection_BCs = read_python_list("convection_BCs.txt")
+    point_sources = np.asarray(read_python_list("point_sources.txt"), dtype=float)
+    temperatures = np.asarray(read_python_list("nodal_temperatures.txt"), dtype=float)
+    heat_fluxes = np.asarray(read_python_list("element_heat_fluxes.txt"), dtype=float)
+
+    if len(temperatures) != len(nodes):
+        raise ValueError("Number of temperatures does not match nodes.")
+    if heat_fluxes.shape != (len(connectivity), 2):
+        raise ValueError("element_heat_fluxes.txt must contain "
+                         "[q_x, q_y] for each element.")
+
+    plot_mesh(nodes, connectivity, convection_BCs, point_sources)
+    plot_temperature_and_flux(nodes, connectivity, temperatures,
+                              heat_fluxes, point_sources)
+
+
+if __name__ == "__main__":
+    main()
