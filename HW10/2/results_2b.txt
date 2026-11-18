@@ -1,0 +1,48 @@
+=== Square 10 x 10 mm   exact (series): T = 32.55764 N*m, max vM = 270.898 MPa
+  T3:  nx   elems  nodes     T [N*m]   vM_max [MPa]   |dT/T|     |dvM/vM|  (change vs previous level)
+         2      8      9     14.47500      141.8255        nan        nan
+         4     32     25     26.68828      195.0100   8.44e-01   3.75e-01
+         8    128     81     30.96310      221.8276   1.60e-01   1.38e-01
+        16    512    289     32.14863      246.0241   3.83e-02   1.09e-01
+        32   2048   1089     32.45459      258.4074   9.52e-03   5.03e-02
+        64   8192   4225     32.53182      264.6409   2.38e-03   2.41e-02
+      torque: observed order p = 1.99, extrapolated T = 32.55789 N*m, GCI(fine) = 0.100%
+      max vM: observed order p = 0.99, extrapolated vM = 270.959 MPa, GCI(fine) = 2.98%
+  Q4:  nx   elems  nodes     T [N*m]   vM_max [MPa]   |dT/T|     |dvM/vM|  (change vs previous level)
+         2      4      9     21.71250      106.3691        nan        nan
+         4     16     25     29.62205      175.1386   3.64e-01   6.47e-01
+         8     64     81     31.80665      221.7937   7.37e-02   2.66e-01
+        16    256    289     32.36857      246.0849   1.77e-02   1.10e-01
+        32   1024   1089     32.51027      258.4267   4.38e-03   5.02e-02
+        64   4096   4225     32.54579      264.6460   1.09e-03   2.41e-02
+      torque: observed order p = 2.00, extrapolated T = 32.55767 N*m, GCI(fine) = 0.046%
+      max vM: observed order p = 0.99, extrapolated vM = 270.964 MPa, GCI(fine) = 2.98%
+
+=== Rectangle 5 x 20 mm (1:4)   exact (series): T = 16.25907 N*m, max vM = 199.964 MPa
+  T3:  nx   elems  nodes     T [N*m]   vM_max [MPa]   |dT/T|     |dvM/vM|  (change vs previous level)
+         2     32     27     11.34124      103.8104        nan        nan
+         4    128     85     14.93725      149.6916   3.17e-01   4.42e-01
+         8    512    297     15.92038      174.8596   6.58e-02   1.68e-01
+        16   2048   1105     16.17374      187.4202   1.59e-02   7.18e-02
+        32   8192   4257     16.23769      193.6943   3.95e-03   3.35e-02
+      torque: observed order p = 1.99, extrapolated T = 16.25928 N*m, GCI(fine) = 0.166%
+      max vM: observed order p = 1.00, extrapolated vM = 199.956 MPa, GCI(fine) = 4.04%
+  Q4:  nx   elems  nodes     T [N*m]   vM_max [MPa]   |dT/T|     |dvM/vM|  (change vs previous level)
+         2     16     27     12.13911      100.1553        nan        nan
+         4     64     85     15.22099      149.9743   2.54e-01   4.97e-01
+         8    256    297     15.99879      174.9333   5.11e-02   1.66e-01
+        16   1024   1105     16.19394      187.4388   1.22e-02   7.15e-02
+        32   4096   4257     16.24278      193.6990   3.02e-03   3.34e-02
+      torque: observed order p = 2.00, extrapolated T = 16.25909 N*m, GCI(fine) = 0.126%
+      max vM: observed order p = 1.00, extrapolated vM = 199.974 MPa, GCI(fine) = 4.05%
+
+=== Circle, provided ANSYS quarter mesh (842 Q4 elements, 899 nodes, R = 5.642 mm)
+  quarter-model torque = 9.20968 N*m   ->  full-section torque 4T = 36.83871 N*m
+  exact: T = 36.86301 N*m, max vM = 226.325 MPa;  FE max vM = 222.970 MPa
+  (check only) error: T 0.066%, vM 1.48%
+
+=== Comparison at equal area 1 cm^2 (box shapes: Q4 Richardson-extrapolated; circle: ANSYS mesh)
+  shape        T [N*m]   T/T_circ   vM_max [MPa]   vM/vM_circ   T/vM_max [nN*m/Pa]
+  Circle       36.839     1.000        222.97       1.000        165.2
+  Square       32.558     0.884        270.96       1.215        120.2
+  Rect 1:4     16.259     0.441        199.97       0.897         81.3
